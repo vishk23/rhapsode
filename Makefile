@@ -2,7 +2,11 @@ APP_NAME ?= Whispr Free Me Dev
 BUNDLE_ID ?= com.vishk23.whisprfreeme.dev
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-CODESIGN_IDENTITY ?= -
+# Stable signing identity so macOS keeps Accessibility / Microphone / Input-Monitoring
+# grants across rebuilds (ad-hoc "-" changes the code hash every build and drops them).
+# Hash = "Developer ID Application: Vishnu Kchitti (R78VP2V5AQ)" (two certs share that name,
+# so we pin by SHA-1). Override with `make CODESIGN_IDENTITY=-` for an ad-hoc build.
+CODESIGN_IDENTITY ?= DFA91A6910C03A08E484BEB0C53AC107C461C800
 CONTENTS = $(APP_BUNDLE)/Contents
 MACOS_DIR = $(CONTENTS)/MacOS
 empty :=
