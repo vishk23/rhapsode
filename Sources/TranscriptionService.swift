@@ -286,16 +286,21 @@ class TranscriptionService {
         return normalizedURL
     }
 
-    // Whisper-large-v3 hallucinates common short phrases on silence/background
-    // noise. HallucinationFilter strips trailing hallucinated segments
-    // (identified by a high no_speech_prob on that segment) while preserving
-    // real speech that happens to precede them.
+    // Whisper hallucinates short filler phrases ("Okay.", "Bye.", "Thank you.") at the
+    // end of a clip. HallucinationFilter strips a trailing filler segment when Whisper
+    // flags it as silence OR it is a short, isolated trailing segment (the signature of a
+    // confident end-of-clip hallucination), preserving the real speech before it.
     private func parseTranscript(from data: Data) throws -> String {
         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
            let text = json["text"] as? String {
             let rawSegments = (json["segments"] as? [[String: Any]]) ?? []
             let segments = rawSegments.map {
-                WhisperSegment(text: $0["text"] as? String ?? "", noSpeechProb: $0["no_speech_prob"] as? Double)
+                WhisperSegment(
+                    text: $0["text"] as? String ?? "",
+                    noSpeechProb: $0["no_speech_prob"] as? Double,
+                    start: $0["start"] as? Double,
+                    end: $0["end"] as? Double
+                )
             }
             let cleaned = HallucinationFilter.strip(text: text, segments: segments)
             if cleaned != text {

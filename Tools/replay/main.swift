@@ -86,6 +86,8 @@ private struct TranscriptionResponse: Decodable {
     struct Segment: Decodable {
         let text: String
         let no_speech_prob: Double?
+        let start: Double?
+        let end: Double?
     }
     let text: String
     let segments: [Segment]?
@@ -135,7 +137,7 @@ private func transcribe(wavURL: URL, apiKey: String, model: String, baseURL: Str
     do {
         let decoded = try JSONDecoder().decode(TranscriptionResponse.self, from: data)
         let segments = (decoded.segments ?? []).map {
-            WhisperSegment(text: $0.text, noSpeechProb: $0.no_speech_prob)
+            WhisperSegment(text: $0.text, noSpeechProb: $0.no_speech_prob, start: $0.start, end: $0.end)
         }
         return .success((rawText: decoded.text, segments: segments))
     } catch {
