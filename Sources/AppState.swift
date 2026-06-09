@@ -494,6 +494,14 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private let voiceBankEnabledStorageKey = "voiceBankEnabled"
+
+    @Published var voiceBankEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(voiceBankEnabled, forKey: voiceBankEnabledStorageKey)
+        }
+    }
+
     @Published var isPressEnterVoiceCommandEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isPressEnterVoiceCommandEnabled, forKey: pressEnterVoiceCommandStorageKey)
@@ -581,6 +589,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var audioDeviceObservers: [NSObjectProtocol] = []
     private var needsMicrophoneRefreshAfterRecording = false
     private let pipelineHistoryStore = PipelineHistoryStore()
+    private let voiceBank = VoiceBank(baseDirectory: AppState.appSupportBaseDirectory())
     private let shortcutSessionController = DictationShortcutSessionController()
     private var activeRecordingTriggerMode: RecordingTriggerMode?
     private var currentSessionIntent: SessionIntent = .dictation
@@ -726,6 +735,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.outputLanguage = outputLanguage
         self.shortcutStartDelay = shortcutStartDelay
         self.preserveClipboard = preserveClipboard
+        self.voiceBankEnabled = UserDefaults.standard.bool(forKey: voiceBankEnabledStorageKey)
         self.realtimeStreamingEnabled = realtimeStreamingEnabled
         self.realtimeStreamingModel = realtimeStreamingModel
         self.dictationAudioInterruptionEnabled = dictationAudioInterruptionEnabled
@@ -998,6 +1008,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let fileURL: URL
     }
 
+    static func appSupportBaseDirectory() -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent(AppName.displayName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     static func audioStorageDirectory() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appName = AppName.displayName
@@ -1085,6 +1102,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
             errorMessage = "Unable to clear run history: \(error.localizedDescription)"
         }
     }
+
+    func voiceBankStats() -> VoiceBankStats { voiceBank.stats() }
+
+    func voiceBankSamples() -> [VoiceSample] { voiceBank.allSamples() }
+
+    func voiceBankAudioURL(for sample: VoiceSample) -> URL { voiceBank.audioURL(for: sample) }
+
+    var voiceBankDirectory: URL { voiceBank.audioDirectory }
+
+    func deleteVoiceSample(id: UUID) { voiceBank.delete(id: id) }
+
+    func deleteAllVoiceBank() { voiceBank.deleteAll() }
 
     func deleteHistoryEntry(id: UUID) {
         guard let index = pipelineHistory.firstIndex(where: { $0.id == id }) else { return }
@@ -2747,6 +2776,22 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 Self.deleteAudioFile(audioFileName)
             }
             pipelineHistory = pipelineHistoryStore.loadAllHistory()
+            if voiceBankEnabled,
+               intent.persistedIntent == .dictation,
+               let audioFileName {
+                let sourceURL = Self.audioStorageDirectory().appendingPathComponent(audioFileName)
+                let transcript = rawTranscript
+                let bundleId = context.bundleIdentifier
+                let bank = voiceBank
+                DispatchQueue.global(qos: .utility).async {
+                    bank.bankIfEligible(
+                        sourceWavURL: sourceURL,
+                        transcript: transcript,
+                        intent: PipelineHistoryItemIntent.dictation.rawValue,
+                        appBundleId: bundleId
+                    )
+                }
+            }
         } catch {
             errorMessage = "Unable to save run history entry: \(error.localizedDescription)"
         }
