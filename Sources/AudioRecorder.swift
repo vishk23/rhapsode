@@ -93,8 +93,27 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
     @Published var audioLevel: Float = 0.0
     private let liveLevelNormalizerLock = OSAllocatedUnfairLock(initialState: LiveAudioLevelNormalizer())
 
+    // One-pole high-pass filter state — used only for the visual meter path.
+    // Cutoff ≈ 90 Hz at 16 kHz: alpha = 1 / (1 + 2π·fc/fs) ≈ 0.9964.
+    // Filters out fan/hum/rumble so low-freq background doesn't drive the meter.
+    // NOT applied to the recorded WAV or PCM16 stream.
+    private var hpFilterPrev: Float = 0      // previous raw sample (x[n-1])
+    private var hpFilterPrevOut: Float = 0   // previous filtered sample (y[n-1])
+    private static let hpFilterAlpha: Float = 0.9964 // 1 - 2π·90/16000
+
     var onRecordingReady: (() -> Void)?
     var onRecordingFailure: ((Error) -> Void)?
+    /// Fires on the main queue the moment the capture session delivers its FIRST buffer —
+    /// i.e. when the microphone is genuinely live. Distinct from ``onRecordingReady`` (first
+    /// *non-silent* buffer): use this for an honest "talk now" cue so the user is never
+    /// prompted to speak before the mic is actually capturing.
+    var onCaptureLive: (() -> Void)?
+    private var captureLiveFired = false
+    /// Highest per-buffer (raw, unfiltered) RMS seen during the current/last session. Read
+    /// after ``stopRecording`` to tell a real utterance from a clip that captured only room
+    /// tone — the fully-dropped-audio signature. Reset at the start of each recording.
+    private let _peakRMS = OSAllocatedUnfairLock<Float>(initialState: 0)
+    var lastPeakRMS: Float { _peakRMS.withLock { $0 } }
     /// Fires on the sample-buffer queue with a 24 kHz mono PCM16 chunk for
     /// each incoming audio buffer (matching OpenAI Realtime's default PCM
     /// input rate). Set before ``startRecording`` to stream audio out-of-band
@@ -249,6 +268,8 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             let discardURL = self.finishAudioFileLocked(discard: true)
             self.teardownSessionLocked()
             self.liveLevelNormalizerLock.withLock { $0.reset() }
+            self.hpFilterPrev = 0
+            self.hpFilterPrevOut = 0
             if let discardURL {
                 try? FileManager.default.removeItem(at: discardURL)
             }
@@ -641,8 +662,12 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
         recordingStartTime = t0
         _bufferCount.withLock { $0 = 0 }
         readyFired = false
+        captureLiveFired = false
         failureReported = false
+        _peakRMS.withLock { $0 = 0 }
         liveLevelNormalizerLock.withLock { $0.reset() }
+        hpFilterPrev = 0
+        hpFilterPrevOut = 0
 
         os_log(.info, log: recordingLog, "startRecording() entered")
 
@@ -684,6 +709,8 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             let outputURL = self.finishAudioFileLocked(discard: false)
             self._recording.withLock { $0 = false }
             self.liveLevelNormalizerLock.withLock { $0.reset() }
+            self.hpFilterPrev = 0
+            self.hpFilterPrevOut = 0
             DispatchQueue.main.async {
                 self.isRecording = false
                 self.audioLevel = 0.0
@@ -699,6 +726,8 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             let discardURL = self.finishAudioFileLocked(discard: true)
             self._recording.withLock { $0 = false }
             self.liveLevelNormalizerLock.withLock { $0.reset() }
+            self.hpFilterPrev = 0
+            self.hpFilterPrevOut = 0
             if let discardURL {
                 try? FileManager.default.removeItem(at: discardURL)
             }
@@ -739,15 +768,73 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             frameCount: frameCount
         ) else { return 0 }
 
+        // Broadband RMS — used for ready-detection (must not be filtered).
         let rms = rmsLevel(for: inputBuffer)
+
+        // High-pass filtered RMS — used only for the visual meter so that
+        // low-frequency background (fan, hum, rumble) doesn't drive the bars.
+        // The recorded WAV and PCM16 stream are completely unaffected.
+        let filteredRMS = rmsLevelHighPassed(for: inputBuffer)
         let normalizedDisplayLevel = liveLevelNormalizerLock.withLock {
-            $0.normalizedLevel(forRMS: rms)
+            $0.normalizedLevel(forRMS: filteredRMS)
         }
 
         DispatchQueue.main.async {
             self.audioLevel = normalizedDisplayLevel
         }
         return rms
+    }
+
+    /// Compute RMS of `buffer` after applying a one-pole high-pass filter
+    /// (cutoff ≈ 90 Hz). Mutates `hpFilterPrev`/`hpFilterPrevOut` in place.
+    /// Must only be called from the sample-buffer queue (single writer).
+    private func rmsLevelHighPassed(for buffer: AVAudioPCMBuffer) -> Float {
+        let alpha = Self.hpFilterAlpha
+        let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+
+        var totalSamples = 0
+        var sumOfSquares: Double = 0
+
+        for audioBuffer in audioBuffers {
+            guard let baseAddress = audioBuffer.mData, audioBuffer.mDataByteSize > 0 else { continue }
+
+            switch buffer.format.commonFormat {
+            case .pcmFormatFloat32:
+                let samples = Int(audioBuffer.mDataByteSize) / MemoryLayout<Float>.size
+                let pointer = baseAddress.assumingMemoryBound(to: Float.self)
+                totalSamples += samples
+                for i in 0..<samples {
+                    let x = pointer[i]
+                    let y = alpha * (hpFilterPrevOut + x - hpFilterPrev)
+                    hpFilterPrev = x
+                    hpFilterPrevOut = y
+                    sumOfSquares += Double(y) * Double(y)
+                }
+            case .pcmFormatInt16:
+                let samples = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int16>.size
+                let pointer = baseAddress.assumingMemoryBound(to: Int16.self)
+                totalSamples += samples
+                for i in 0..<samples {
+                    let x = Float(pointer[i]) / 32768.0
+                    let y = alpha * (hpFilterPrevOut + x - hpFilterPrev)
+                    hpFilterPrev = x
+                    hpFilterPrevOut = y
+                    sumOfSquares += Double(y) * Double(y)
+                }
+            default:
+                // Fallback: unfiltered (other formats are uncommon)
+                let samples = Int(audioBuffer.mDataByteSize) / MemoryLayout<Float>.size
+                let pointer = baseAddress.assumingMemoryBound(to: Float.self)
+                totalSamples += samples
+                for i in 0..<samples {
+                    let s = Double(pointer[i])
+                    sumOfSquares += s * s
+                }
+            }
+        }
+
+        guard totalSamples > 0 else { return 0 }
+        return Float(sqrt(sumOfSquares / Double(totalSamples)))
     }
 
     private func rmsLevel(for buffer: AVAudioPCMBuffer) -> Float {
@@ -875,8 +962,17 @@ final class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputS
             value += 1
             return value
         }
+        if count == 1 && !captureLiveFired {
+            captureLiveFired = true
+            let elapsed = (CFAbsoluteTimeGetCurrent() - recordingStartTime) * 1000
+            os_log(.info, log: recordingLog, "FIRST buffer (mic live) at %.3fms", elapsed)
+            DispatchQueue.main.async {
+                self.onCaptureLive?()
+            }
+        }
 
         let rms = updateAudioLevel(from: sampleBuffer)
+        _peakRMS.withLock { $0 = max($0, rms) }
         if count <= Self.sampleRateLogLimit {
             let elapsed = (CFAbsoluteTimeGetCurrent() - recordingStartTime) * 1000
             os_log(.info, log: recordingLog, "buffer #%d at %.3fms, rms=%.6f", count, elapsed, rms)

@@ -5,7 +5,10 @@ import AppKit
 
 final class RecordingOverlayState: ObservableObject {
     @Published var phase: OverlayPhase = .recording
-    @Published var audioLevel: Float = 0.0
+    @Published var audioLevel: Float = 0.0 {
+        didSet { appendLevelHistory(audioLevel) }
+    }
+    @Published var audioLevelHistory: [Float] = []
     @Published var recordingTriggerMode: RecordingTriggerMode = .hold
     @Published var isCommandMode = false
     @Published var dictationModeName: String? = nil
@@ -13,6 +16,16 @@ final class RecordingOverlayState: ObservableObject {
     @Published var updateVersion: String = ""
     @Published var errorMessage: String?
     @Published var toastID: UUID?
+
+    /// Number of history slots rendered by `WaveformView` (matches barCount).
+    static let historyLength = 13
+
+    private func appendLevelHistory(_ level: Float) {
+        audioLevelHistory.append(level)
+        if audioLevelHistory.count > Self.historyLength {
+            audioLevelHistory.removeFirst(audioLevelHistory.count - Self.historyLength)
+        }
+    }
 }
 
 enum OverlayPhase {
@@ -513,29 +526,32 @@ struct WingedRecordingView: View {
                         }
                         .transition(.opacity)
                     } else if showsLiveRecordingContent {
-                        // Command-mode pencil sits directly above and centered
-                        // over the compact waveform inside the same wing
-                        // rectangle. Closes the gap between pill and winged
-                        // layouts: pill users already see a pencil during
-                        // command-mode dictation; winged users now do too.
-                        VStack(spacing: 1) {
-                            if state.isCommandMode {
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.92))
-                                    .transition(.opacity)
-                            }
+                        // Waveform centered in the wing. Command-mode pencil
+                        // overlays top-center; mode chip overlays bottom-center.
+                        // Both use ZStack overlays so they share the wing's
+                        // vertical lane with the waveform instead of stacking
+                        // above/below it (which overflows the menu-bar height).
+                        ZStack(alignment: .center) {
                             CompactWaveformView(
                                 audioLevel: state.audioLevel,
                                 showsActivityPulse: state.phase == .recording
                             )
-                            // Wing is only 36pt wide — icon-only chip, no text.
+                            if state.isCommandMode {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.85))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                                    .transition(.opacity)
+                            }
                             if let icon = state.dictationModeIcon {
                                 ModeChipCompactView(
                                     modeIcon: icon,
                                     modeName: state.dictationModeName
                                 )
+                                .scaleEffect(0.75)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                                 .animation(.spring(response: 0.28, dampingFraction: 0.9), value: state.dictationModeName)
+                                .transition(.opacity)
                             }
                         }
                         .transition(.opacity)
@@ -600,13 +616,15 @@ struct WaveformBar: View {
     }
 }
 
+/// Drop-down pill waveform. Renders 13 bars as a scrolling level history —
+/// left bars are older, right bar is the freshest sample. This gives a real
+/// meter feel: bars visibly travel left as new audio arrives.
 struct WaveformView: View {
     let audioLevel: Float
+    let levelHistory: [Float]
     var showsActivityPulse = false
 
-    private static let barCount = 9
-    private static let multipliers: [CGFloat] = [0.35, 0.55, 0.75, 0.9, 1.0, 0.9, 0.75, 0.55, 0.35]
-    private static let centerIndex = CGFloat((barCount - 1) / 2)
+    static let barCount = RecordingOverlayState.historyLength  // 13
 
     var body: some View {
         Group {
@@ -622,27 +640,34 @@ struct WaveformView: View {
     }
 
     private func waveformBars(pulseTime: TimeInterval?) -> some View {
-        HStack(spacing: 2.5) {
+        HStack(spacing: 2) {
             ForEach(0..<Self.barCount, id: \.self) { index in
                 WaveformBar(amplitude: barAmplitude(for: index, pulseTime: pulseTime))
                     .animation(
-                        .spring(
-                            response: barResponse(for: index),
-                            dampingFraction: 0.88
-                        )
-                        .delay(barDelay(for: index)),
-                        value: audioLevel
+                        .spring(response: 0.14, dampingFraction: 0.82),
+                        value: levelHistory
                     )
             }
         }
     }
 
+    /// Each bar draws its amplitude from the history slot at `index`.
+    /// The history is padded on the left with zeros if fewer than barCount
+    /// samples have arrived.
+    private func historyLevel(for index: Int) -> Float {
+        let padded = Self.barCount - levelHistory.count
+        let historyIndex = index - padded
+        guard historyIndex >= 0, historyIndex < levelHistory.count else { return 0 }
+        return levelHistory[historyIndex]
+    }
+
     private func barAmplitude(for index: Int, pulseTime: TimeInterval?) -> CGFloat {
-        let level = CGFloat(max(audioLevel, 0))
-        let baseAmplitude = min(level * Self.multipliers[index], 1.0)
+        let level = CGFloat(max(historyLevel(for: index), 0))
+        let baseAmplitude = min(level, 1.0)
 
         guard let pulseTime else { return baseAmplitude }
 
+        // Idle pulse when level is low — keeps the meter alive during silence.
         let travelingWave = CGFloat(0.5 + 0.5 * sin((pulseTime * 6.2) - Double(index) * 0.78))
         let shimmer = CGFloat(0.5 + 0.5 * sin((pulseTime * 3.1) + Double(index) * 0.5))
         let pulse = travelingWave * 0.22 + shimmer * 0.06
@@ -650,17 +675,6 @@ struct WaveformView: View {
         let saturationRelief = baseAmplitude * (0.74 + pulse)
         let quietPulse = (1.0 - baseAmplitude) * (0.04 + pulse * 0.28)
         return min(saturationRelief + quietPulse, 1.0)
-    }
-
-    private func barResponse(for index: Int) -> Double {
-        let distance = abs(CGFloat(index) - Self.centerIndex)
-        let normalizedDistance = distance / Self.centerIndex
-        return 0.18 + Double(normalizedDistance) * 0.06
-    }
-
-    private func barDelay(for index: Int) -> Double {
-        let distance = abs(CGFloat(index) - Self.centerIndex)
-        return Double(distance) * 0.01
     }
 }
 
@@ -1008,8 +1022,11 @@ struct RecordingOverlayView: View {
     let onStopButtonPressed: () -> Void
     let onUpdateOverlayPressed: () -> Void
 
-    private let leadingAccessoryWidth: CGFloat = 24
-    private let trailingAccessoryWidth: CGFloat = 32
+    // Left-slot width: wide enough for the full mode chip (icon + label).
+    // When no chip is present, the slot still balances the right stop-button
+    // slot so the waveform stays visually centered.
+    private let sideSlotWidth: CGFloat = 54
+    private let stopButtonSize: CGFloat = 14
 
     private var showsLiveRecordingContent: Bool {
         state.phase == .recording
@@ -1028,7 +1045,37 @@ struct RecordingOverlayView: View {
             } else if state.phase == .updateAvailable {
                 UpdateAvailableOverlayView(onPress: onUpdateOverlayPressed)
             } else {
-                ZStack {
+                // Horizontal row: [left slot] [Spacer] [center content] [Spacer] [right slot]
+                // The symmetric Spacers keep the center content visually centered
+                // regardless of whether the mode chip or stop button are shown.
+                HStack(spacing: 0) {
+                    // Left slot — mode chip (+ command-mode pencil above it when both active).
+                    Group {
+                        if (state.phase == .initializing || state.phase == .recording),
+                           let modeName = state.dictationModeName {
+                            VStack(spacing: 2) {
+                                if state.isCommandMode {
+                                    CommandModeIndicator()
+                                        .transition(.opacity)
+                                }
+                                ModeChipView(
+                                    modeName: modeName,
+                                    modeIcon: state.dictationModeIcon ?? "text.alignleft"
+                                )
+                                .animation(.spring(response: 0.28, dampingFraction: 0.9), value: modeName)
+                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                            }
+                        } else if state.isCommandMode && (state.phase == .initializing || showsLiveRecordingContent) {
+                            CommandModeIndicator()
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(width: sideSlotWidth, alignment: .center)
+                    .frame(maxHeight: .infinity, alignment: .center)
+
+                    Spacer(minLength: 0)
+
+                    // Center — waveform / initializing dots / processing indicator.
                     Group {
                         if state.phase == .initializing {
                             InitializingDotsView()
@@ -1036,58 +1083,34 @@ struct RecordingOverlayView: View {
                         } else if showsLiveRecordingContent {
                             WaveformView(
                                 audioLevel: state.audioLevel,
+                                levelHistory: state.audioLevelHistory,
                                 showsActivityPulse: state.phase == .recording
                             )
-                                .transition(.opacity)
+                            .transition(.opacity)
                         } else {
                             ProcessingIndicatorView()
                                 .transition(.opacity)
                         }
                     }
 
-                    HStack {
-                        Group {
-                            if state.isCommandMode {
-                                CommandModeIndicator()
-                                    .transition(.opacity)
+                    Spacer(minLength: 0)
+
+                    // Right slot — stop button (toggle mode) or empty balancing space.
+                    Group {
+                        if showsStopButton {
+                            Button(action: onStopButtonPressed) {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 7, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: stopButtonSize, height: stopButtonSize)
+                                    .background(Circle().fill(Color.red.opacity(0.92)))
                             }
-                        }
-                        .frame(width: leadingAccessoryWidth, alignment: .center)
-                        .frame(maxHeight: .infinity, alignment: .center)
-
-                        Spacer(minLength: 0)
-
-                        Group {
-                            if showsStopButton {
-                                Button(action: onStopButtonPressed) {
-                                    Image(systemName: "stop.fill")
-                                        .font(.system(size: 7, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 14, height: 14)
-                                        .background(Circle().fill(Color.red.opacity(0.92)))
-                                }
-                                .buttonStyle(.plain)
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                            }
-                        }
-                        .frame(width: trailingAccessoryWidth, alignment: .trailing)
-                    }
-
-                    // Mode chip — bottom-centre of the pill, shown as soon as
-                    // the overlay is up (initializing OR recording phases) so
-                    // there is no lag between the pill appearing and the chip.
-                    if (state.phase == .initializing || state.phase == .recording),
-                       let modeName = state.dictationModeName {
-                        VStack {
-                            Spacer(minLength: 0)
-                            ModeChipView(
-                                modeName: modeName,
-                                modeIcon: state.dictationModeIcon ?? "text.alignleft"
-                            )
-                            .padding(.bottom, 3)
-                            .animation(.spring(response: 0.28, dampingFraction: 0.9), value: modeName)
+                            .buttonStyle(.plain)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
+                    .frame(width: sideSlotWidth, alignment: .trailing)
+                    .frame(maxHeight: .infinity, alignment: .center)
                 }
             }
         }

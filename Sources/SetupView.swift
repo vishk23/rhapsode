@@ -951,7 +951,7 @@ struct SetupView: View {
                                 .frame(width: 100, height: 100)
                                 .shadow(color: .blue.opacity(0.5), radius: 10)
 
-                            WaveformView(audioLevel: testAudioLevel)
+                            WaveformView(audioLevel: testAudioLevel, levelHistory: [testAudioLevel])
                         }
 
                         Text("Listening...")
