@@ -1921,6 +1921,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let t0 = CFAbsoluteTimeGetCurrent()
         os_log(.info, log: recordingLog, "startRecording() entered")
         guard !isRecording && !isTranscribing else { return }
+        // Immediate press feedback — fire the start cue the moment dictation is triggered,
+        // not when the first audio buffer arrives (which lags, especially on AirPods).
+        playAlertSound(named: "Tink")
         let scheduledSelectionSnapshot = pendingSelectionSnapshot
         let scheduledManualCommandInvocation = pendingManualCommandInvocation
         cancelPendingShortcutStart()
@@ -2203,7 +2206,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     )
                 }
                 overlayShown = true
-                self.playAlertSound(named: "Tink")
             }
         }
         audioRecorder.onRecordingFailure = { [weak self] error in
@@ -2527,7 +2529,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         isTranscribing = true
         statusText = "Preparing audio..."
         errorMessage = nil
-        playAlertSound(named: "Glass")
+        playAlertSound(named: "Pop")
         overlayManager.showTranscribing()
         audioRecorder.stopRecording { [weak self] fileURL in
             guard let self else { return }
