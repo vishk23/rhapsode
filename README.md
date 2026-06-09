@@ -2,10 +2,14 @@
   <img src="Resources/AppIcon-Source.png" width="128" height="128" alt="FreeFlow icon">
 </p>
 
-<h1 align="center">FreeFlow</h1>
+<h1 align="center">Whispr Free Me</h1>
 
 <p align="center">
   Free and open source alternative to <a href="https://wisprflow.ai">Wispr Flow</a>, <a href="https://superwhisper.com">Superwhisper</a>, and <a href="https://monologue.to">Monologue</a>.
+</p>
+
+<p align="center">
+  A fork of <a href="https://github.com/zachlatta/freeflow">FreeFlow</a> that adds a local, opt-in <b>Voice Bank</b> — and, on the roadmap, cloud voice cloning and system-wide "speak as me". See <a href="docs/superpowers/specs/2026-06-08-whispr-free-me-design.md">the design doc</a>.
 </p>
 
 <p align="center">
@@ -35,6 +39,7 @@ FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.
 
 ## Features
 
+- **Voice Bank (opt-in):** Off by default. When you turn it on, Whispr Free Me keeps a local copy of each dictation's audio and exact transcript to build a voice-training dataset. Nothing is uploaded; browse and delete it in Settings → Voice Bank.
 - **Custom shortcuts:** Customize both hold-to-talk and toggle dictation shortcuts. If your toggle shortcut extends your hold shortcut, you can start in hold mode and press the extra modifier keys to latch into tap mode without stopping the recording.
 - **Context-aware cleanup:** FreeFlow can read nearby app context so names, terms, and phrases are spelled correctly when you dictate into email, terminals, docs, and other apps.
 - **Custom vocabulary:** Add names, jargon, and project-specific words that FreeFlow should preserve during cleanup.
@@ -44,9 +49,21 @@ FreeFlow is a free Mac dictation app inspired by [Wispr Flow](https://wisprflow.
 
 Edit Mode lets you highlight existing text and transform it with a spoken instruction, like "make this shorter" or "turn this into bullets." Enable it in settings, then use your normal dictation shortcut on selected text, or choose Manual mode to require an extra modifier key.
 
+## Voice Bank
+
+The Voice Bank is an opt-in feature that builds a personal voice-training dataset as you dictate. It is **off by default**.
+
+When enabled (Settings → Voice Bank), each completed dictation has its audio (a 16 kHz mono WAV) and its exact spoken transcript saved locally to `~/Library/Application Support/Whispr Free Me/VoiceBank/`. A quality gate skips silent, very short, or non-dictation clips. The data is stored in its own database, independent of the run-history limit, so it is never trimmed away.
+
+**Nothing is uploaded.** The Voice Bank only writes to your Mac. You can see how much you've banked, play back samples, and delete individual clips or everything at once, all from Settings → Voice Bank. A menu-bar indicator shows when banking is active.
+
+This dataset is the foundation for upcoming cloud voice cloning and a system-wide "speak as me" feature; uploading anything off-device will always be a separate, explicit action.
+
 ## Privacy
 
-There is no FreeFlow server, so FreeFlow does not store or retain your data. The only information that leaves your computer are API calls to your configured transcription and LLM provider.
+There is no Whispr Free Me server, so by default Whispr Free Me does not store or retain your data. The only information that leaves your computer are API calls to your configured transcription and LLM provider.
+
+The optional **Voice Bank** (off by default) is the one feature that stores data, and it stores it **locally only** — see the section above. Turning it on does not send anything off-device.
 
 ## Custom Cleanup
 

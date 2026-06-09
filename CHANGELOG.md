@@ -8,6 +8,23 @@ This project uses semantic versioning for public releases. Use `MAJOR.MINOR.PATC
 - `MINOR` changes add user-visible features and improvements.
 - `PATCH` changes fix bugs, polish existing behavior, or make small internal improvements.
 
+## [Unreleased]
+
+This is the first release of the **Whispr Free Me** fork of FreeFlow.
+
+### Added
+
+- Voice Bank: opt-in, local-only capture of (audio, transcript) pairs from your
+  dictations to build a voice-training dataset. Off by default; browse, play back,
+  and delete in Settings → Voice Bank. A quality gate skips silent/very short/
+  non-dictation clips, and the data is kept in its own store, independent of the
+  run-history limit. Nothing is uploaded.
+- A menu-bar indicator shown while the Voice Bank is active.
+
+### Changed
+
+- Rebranded the app from FreeFlow to Whispr Free Me.
+
 ## [1.1.0] - 2026-06-03
 
 ### Added
