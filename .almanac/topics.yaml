@@ -1,0 +1,17 @@
+# Topics for the whispr-free-me wiki. slug: { description, parents }.
+voice-pipeline:
+  description: The dictation flow — capture audio, transcribe, gather context, clean up, paste.
+voice-bank:
+  description: Opt-in local store of (audio, raw transcript) pairs for voice-model training.
+  parents: [voice-pipeline]
+voice-cloning:
+  description: ElevenLabs voice clone and speak-as-me text-to-speech playback.
+  parents: [voice-pipeline]
+ui:
+  description: Menu-bar recording overlay, dashboard window, settings.
+build-and-signing:
+  description: Makefile build, Developer ID code signing, macOS TCC permissions.
+decisions:
+  description: Architecture decisions and their rationale.
+gotchas:
+  description: Non-obvious traps discovered through debugging.
