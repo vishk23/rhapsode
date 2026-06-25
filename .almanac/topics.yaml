@@ -15,3 +15,6 @@ decisions:
   description: Architecture decisions and their rationale.
 gotchas:
   description: Non-obvious traps discovered through debugging.
+dictation-modes:
+  description: Content-aware cleanup modes — routing, prompt snippets, casual register, eval harness.
+  parents: [voice-pipeline]

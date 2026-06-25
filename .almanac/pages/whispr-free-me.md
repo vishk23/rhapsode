@@ -38,9 +38,11 @@ Hold `Fn` (or tap the toggle shortcut) → record → transcribe → clean up �
    strips Whisper's trailing filler hallucinations and silent-clip garbage — see [[gotchas-and-decisions]].
 3. **Context + modes** — [[Sources/AppContextService.swift]] reads the frontmost app, window
    title, the **selected text** (`kAXSelectedTextAttribute`, Accessibility), and optionally a
-   screenshot. Content-aware modes (`DictationModes`, now extracted toward a `DictationModeKit`
-   SwiftPM module) map the frontmost app's bundle id → a cleanup style (Mail→formal, Xcode/
-   Terminal→code, Messages/Slack→casual, else standard) injected into the cleanup prompt.
+   screenshot. Content-aware modes (`DictationModes`, in the `DictationModeKit` SwiftPM module at
+   [[Sources/DictationModes/DictationModes.swift]]) map the frontmost app's bundle id → a cleanup
+   style (Mail→formal, Xcode/Terminal→code, Messages/Slack→casual, else standard) injected into
+   the cleanup prompt. See [[dictation-modes]] for routing rules, the casual register, and the eval
+   harness.
 4. **Clean up** — [[Sources/PostProcessingService.swift]] sends raw transcript + context + custom
    vocabulary to a cleanup LLM (default `openai/gpt-oss-120b` on Groq) and returns polished text,
    which is pasted.
@@ -65,4 +67,6 @@ ElevenLabs integration — see [[voice-cloning]].
 ## Build, signing, gotchas
 See [[gotchas-and-decisions]] for code signing, the okay-hallucination fix, the cold-start silence
 guards (`capturedAudioWasSilent` / `isSilentClipFiller`), the honest start cue and cue-before-duck
-fix, the ElevenLabs free-tier wall, AirPods audio ducking, and the `make` staleness trap.
+fix, the ElevenLabs free-tier wall, AirPods audio ducking, the `make` staleness trap, and the
+soft-prompt-suffix pattern (mode snippets that conflict with base-prompt rules lose). See
+[[dictation-modes]] for the four cleanup modes, the casual register, and the eval harness.

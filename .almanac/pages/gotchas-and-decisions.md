@@ -80,3 +80,30 @@ full label fits beside a centered waveform. The chip uses `.fixedSize()` to neve
 `os_log` calls still use subsystem `"com.zachlatta.freeflow"` (hardcoded, not rebranded). To read
 the app's logs: `log show --predicate 'subsystem == "com.zachlatta.freeflow"' --info`. Note info-level
 logs are largely memory-only and often absent from `log show`.
+
+## GOTCHA: soft mode-prompt suffixes lose to explicit base rules
+
+A weak mode snippet appended to a strong base prompt does not work — the model follows the
+imperative base rules and ignores the hint.
+
+The `defaultSystemPrompt` in `PostProcessingService.swift` contains explicit directives ("fix
+punctuation and capitalization", "use normal sentence punctuation for complete sentences"). The
+original `.casual` snippet was a one-liner: "lowercase is fine, minimal punctuation." Even with
+`openai/gpt-oss-120b`, 5 of 7 real iMessage dictations came out fully sentence-cased and
+punctuated — indistinguishable from Standard mode — despite the snippet being present in every
+sent prompt.
+
+**Fix:** Make override snippets imperative and explicit. Say "This OVERRIDES the
+capitalization and normal-sentence-punctuation rules above" or restructure the base prompt so mode
+snippets are not fighting it.
+
+**How to diagnose:** The pipeline history DB stores both `ZSYSTEMPROMPT` (base only) and
+`ZPOSTPROCESSINGPROMPT` (full effective prompt sent). Query `ZPOSTPROCESSINGPROMPT` to confirm the
+snippet was present in the real API call before assuming the issue is code, not prompt design:
+```sh
+sqlite3 ~/Library/Application\ Support/Whispr\ Free\ Me\ Dev/PipelineHistory.sqlite \
+  "SELECT Z_PK, CASE WHEN ZPOSTPROCESSINGPROMPT LIKE '%<snippet keyword>%' THEN 'sent' ELSE 'missing' END
+   FROM ZPIPELINEHISTORYENTRY WHERE ZCONTEXTBUNDLEIDENTIFIER='com.apple.MobileSMS';"
+```
+
+See [[dictation-modes]] for the full casual-mode history and the safe register definition.
