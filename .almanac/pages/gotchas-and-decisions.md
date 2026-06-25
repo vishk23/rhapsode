@@ -9,6 +9,7 @@ files:
   - Sources/Transcription/HallucinationFilter.swift
   - Sources/SystemAudioStatus.swift
   - Sources/RecordingOverlay.swift
+  - Sources/LiveAudioLevelNormalizer.swift
   - Package.swift
 ---
 
@@ -58,7 +59,7 @@ Two independent guards prevent this garbage from pasting:
 
 Both guards are TDD'd (9 tests in [[Tests/TranscriptionTests/HallucinationFilterTests.swift]]).
 
-DECISION: the mic is deliberately **not** pre-warmed — the user accepted the first-press lag rather than an always-on mic indicator. Instead the start cue was made honest: the "talk now" Tink fires from `AudioRecorder.onCaptureLive` (the first captured audio buffer — mic genuinely live), not on key-press, so the user is never prompted to speak into a not-yet-live mic.
+DECISION: the mic is deliberately **not** pre-warmed — the user accepted the first-press lag rather than an always-on mic indicator. The start cue fires **immediately on key-press** at the top of `startRecording()` (line 2139, with the comment "Immediate press feedback — fire the start cue the moment dictation is triggered, not when the first audio buffer arrives"). An intermediate design (`707ed9f`) moved the Tink to fire from `AudioRecorder.onCaptureLive` (first real buffer — honest but noticeably laggy on AirPods), then `32d5f3d` reversed it: key-press feedback wins over strict honesty, and the cold-start guards (energy guard + transcript guard) cover the case where the user speaks before the mic is ready. `onCaptureLive` is now unused — it fires in `AudioRecorder` (line 970) but no caller in `AppState` ever assigns it.
 
 ## GOTCHA: AirPods can't do mic + hi-fi audio at once
 Bluetooth can't run A2DP (stereo music) and the microphone (HFP) simultaneously. When the app opens
@@ -68,13 +69,32 @@ the system output volume to ~20% while dictating (a ramped volume change), with 
 when the device's volume isn't settable. The cleanest fix for pristine music is to dictate with the
 built-in mic instead.
 
-**Cue-before-duck:** `applyAudioInterruptionIfNeeded` used to run synchronously inside `startRecording`, immediately after `playAlertSound` fired the Tink. On AirPods the mute fallback swallowed the cue — the user heard the *close* cue (the duck is restored before it plays) but never the *start* cue. `NSSound` plays through the same default output device the duck controls, so the cue cannot be exempted from the mute; sequencing is the only fix. `applyAudioInterruptionIfNeeded` is now deferred into `AudioRecorder.onCaptureLive` and fires only *after* `playAlertSound`'s duration elapses (`playAlertSound` returns the cue duration to enable this), mirroring the close path (restore-then-cue). A guard prevents a tap shorter than the cue's duration from leaving the output stuck ducked after the session ends.
+**Cue-before-duck:** `applyAudioInterruptionIfNeeded` is called synchronously in `startRecording` at line 2153, immediately after `playAlertSound("Tink")` fires at line 2139. `NSSound.play()` is async and non-blocking, so the Tink kicks off before the duck/mute is applied; the volume ramp (if ducking) runs on a background thread over ~0.18s so the Tink completes before the volume drops. For the mute fallback (AirPods in HFP call mode), the mute call is immediate and could theoretically clip a long sound, but the Tink is short and the user confirmed it works in practice. `playAlertSound` returns `void`; there is no duration-based deferral logic.
 
 ## GOTCHA: the mode chip needs the pill widened
 The recording overlay ([[Sources/RecordingOverlay.swift]]) is cramped. The content-aware mode chip
 (Formal/Code/Casual/Standard, color-coded) truncated to "ST…" in the narrow side slot. Fix: when a
 mode chip is visible the pill widens to a fixed **236pt** and the side slot grows to 80pt so the
 full label fits beside a centered waveform. The chip uses `.fixedSize()` to never truncate.
+
+## Audio meter: two RMS paths, adaptive normalizer, high-pass display filter
+
+The visual waveform in the recording overlay uses **two separate RMS paths** computed per audio buffer:
+
+1. **Broadband RMS** (`rmsLevel`) — unfiltered raw RMS. Used for (a) the `onRecordingReady` transition (first non-zero buffer), (b) tracking `peakRMS` for the `capturedAudioWasSilent` silence guard (must be unfiltered — speech in a low-frequency register could be below the high-pass threshold and still real). The silence guard needs this path; using filtered RMS would miss low-frequency voices.
+
+2. **High-pass filtered RMS** (`rmsLevelHighPassed`) — one-pole high-pass at ~90 Hz (alpha = 0.9964 at 16 kHz, in `AudioRecorder`). Used **only** for the visual display bars. This keeps fan noise, A/C hum, and low-frequency rumble from driving the meter up while the user is silent. The recorded WAV and realtime PCM16 stream are completely unaffected by this filter.
+
+The filtered RMS flows through `LiveAudioLevelNormalizer` ([[Sources/LiveAudioLevelNormalizer.swift]]), which tracks an **adaptive noise floor** and **adaptive peak ceiling** to normalize the display level to [0, 1]:
+- Noise floor falls quickly (blend 0.12) and rises slowly (blend 0.02) so brief loud sounds don't inflate it.
+- Peak ceiling attacks fast (blend 0.55) and decays slowly (blend 0.04).
+- **Speech gate:** `levelDB >= noiseFloor + 2 dB` = active speech. Active speech is guaranteed a minimum visible level of 0.14, so whispers don't disappear into the floor.
+- **Noise gate:** levels < 0.06 normalized AND below the speech gate threshold are clamped to 0 (true silence stays flat).
+- **Display smoothing:** attack blend 0.45, release blend 0.13 (calmer than the original 0.6/0.18 that produced a "hyperactive" meter per user feedback).
+
+The pill overlay renders a **scrolling 13-bar history** of these normalized levels (`audioLevelHistory` in `RecordingOverlayState`, appended every buffer, trimmed to 13 entries). The winged overlay renders a single current level.
+
+DECISION: the broadband RMS is what `peakRMS` tracks (not the filtered level). If you ever tune the display meter, do not use `audioLevel` as the silence-detection signal — it may undercount low-frequency recordings.
 
 ## GOTCHA: OSLog subsystem is a rebrand leftover
 `os_log` calls still use subsystem `"com.zachlatta.freeflow"` (hardcoded, not rebranded). To read
