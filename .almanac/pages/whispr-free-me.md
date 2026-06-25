@@ -25,13 +25,17 @@ Hold `Fn` (or tap the toggle shortcut) → record → transcribe → clean up �
 [[Sources/AppState.swift]]:
 
 1. **Capture** — [[Sources/AudioRecorder.swift]] records a normalized **16 kHz mono PCM16 WAV**
-   to a temp file via `AVCaptureSession`. The realtime path also emits 24 kHz PCM16 chunks. The
-   start cue ("Tink") fires the instant `startRecording` is called (not on first audio buffer —
-   that lagged). `playAlertSound` events: start=Tink, stop=Pop, cancel=Funk, error=Sosumi.
-2. **Transcribe** — [[Sources/TranscriptionService.swift]] uploads the WAV to an
+   to a temp file via `AVCaptureSession`. The realtime path also emits 24 kHz PCM16 chunks.
+   `AVCaptureSession` is rebuilt from scratch on every dictation (no persistent/warm session) — the
+   first-press cold-start lag is accepted by design (see [[gotchas-and-decisions]] for the silence
+   guards). The start cue ("Tink") fires from `AudioRecorder.onCaptureLive` (the first captured
+   audio buffer — mic genuinely live), after the background-audio duck is applied, so the user is
+   never prompted to speak before the mic is ready. `playAlertSound` events: start=Tink, stop=Pop,
+   cancel=Funk, error=Sosumi.
+2. **Transcribe** — [[Sources/Pipeline/TranscriptionService.swift]] uploads the WAV to an
    OpenAI-compatible endpoint (Groq by default, `whisper-large-v3-turbo`), `response_format=verbose_json`.
    `HallucinationFilter` (in [[Sources/Transcription/HallucinationFilter.swift]], a SwiftPM module)
-   strips Whisper's trailing filler hallucinations — see [[gotchas-and-decisions]].
+   strips Whisper's trailing filler hallucinations and silent-clip garbage — see [[gotchas-and-decisions]].
 3. **Context + modes** — [[Sources/AppContextService.swift]] reads the frontmost app, window
    title, the **selected text** (`kAXSelectedTextAttribute`, Accessibility), and optionally a
    screenshot. Content-aware modes (`DictationModes`, now extracted toward a `DictationModeKit`
@@ -59,5 +63,6 @@ and **Speak**. Reads `appState.pipelineHistory` + `voiceBankStats()` + `voiceBan
 ElevenLabs integration — see [[voice-cloning]].
 
 ## Build, signing, gotchas
-See [[gotchas-and-decisions]] for code signing, the okay-hallucination fix, the ElevenLabs
-free-tier wall, AirPods audio ducking, and the `make` staleness trap.
+See [[gotchas-and-decisions]] for code signing, the okay-hallucination fix, the cold-start silence
+guards (`capturedAudioWasSilent` / `isSilentClipFiller`), the honest start cue and cue-before-duck
+fix, the ElevenLabs free-tier wall, AirPods audio ducking, and the `make` staleness trap.

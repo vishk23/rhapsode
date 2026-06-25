@@ -3,7 +3,9 @@ title: Build, signing, and gotchas
 topics: [build-and-signing, gotchas, decisions]
 files:
   - Makefile
-  - Sources/TranscriptionService.swift
+  - Sources/AudioRecorder.swift
+  - Sources/AppState.swift
+  - Sources/Pipeline/TranscriptionService.swift
   - Sources/Transcription/HallucinationFilter.swift
   - Sources/SystemAudioStatus.swift
   - Sources/RecordingOverlay.swift
@@ -40,8 +42,23 @@ proved that on real audio the trailing "Okay." is its **own short segment with `
 (Whisper is *confident*). So [[Sources/Transcription/HallucinationFilter.swift]] strips a trailing
 filler segment when it is a known phrase AND (high `no_speech_prob` OR a short, isolated trailing
 segment — duration < ~1.5s). A silence-only carve-out keeps deliberate "Thank you." sign-offs. The
-user later added a separate silent-clip guard (`isSilentClipFiller` / `capturedAudioWasSilent`) for
-cold-start dropped audio.
+project later added a separate silent-clip guard (`isSilentClipFiller` / `capturedAudioWasSilent`) for
+cold-start dropped audio (see below).
+
+## GOTCHA / DECISION: cold-start drops the front of the first utterance → a lone "A"
+[[Sources/AudioRecorder.swift]] rebuilds the entire `AVCaptureSession` (teardown → `startRunning`)
+on **every** dictation — there is no warm or persistent session. The mic is not live for the first
+hundreds of ms (up to ~1–2s on AirPods, whose A2DP→HFP route switch is slow), so a short utterance
+spoken into that gap is partially or fully dropped. Near-silent audio makes Whisper emit a single
+low-information token ("A", "you") that the trailing-filler strip does not catch.
+
+Two independent guards prevent this garbage from pasting:
+- **Energy guard** (`capturedAudioWasSilent(peakRMS:)` in [[Sources/Transcription/HallucinationFilter.swift]]) — [[Sources/AudioRecorder.swift]] tracks peak raw RMS while capturing (not the high-pass-filtered display meter); [[Sources/AppState.swift]] skips the upload and shows "Didn't catch that" when peak < `silenceRMSFloor` (0.006). Stops dropped recordings before any network call.
+- **Transcript guard** (`isSilentClipFiller(text:segments:)`) — drops a whole-clip single-token filler only when Whisper's own metadata flags the clip as silence (`no_speech_prob >= 0.1`). A deliberate one-word "Okay" reply carries a confident, low-`no_speech_prob` segment and is not dropped. Routes to the existing "Nothing to transcribe" path (no paste, no LLM call). Wired in [[Sources/Pipeline/TranscriptionService.swift]].
+
+Both guards are TDD'd (9 tests in [[Tests/TranscriptionTests/HallucinationFilterTests.swift]]).
+
+DECISION: the mic is deliberately **not** pre-warmed — the user accepted the first-press lag rather than an always-on mic indicator. Instead the start cue was made honest: the "talk now" Tink fires from `AudioRecorder.onCaptureLive` (the first captured audio buffer — mic genuinely live), not on key-press, so the user is never prompted to speak into a not-yet-live mic.
 
 ## GOTCHA: AirPods can't do mic + hi-fi audio at once
 Bluetooth can't run A2DP (stereo music) and the microphone (HFP) simultaneously. When the app opens
@@ -50,6 +67,8 @@ the AirPods mic, macOS forces HFP and the user's music gets re-leveled *louder*.
 the system output volume to ~20% while dictating (a ramped volume change), with a **mute fallback**
 when the device's volume isn't settable. The cleanest fix for pristine music is to dictate with the
 built-in mic instead.
+
+**Cue-before-duck:** `applyAudioInterruptionIfNeeded` used to run synchronously inside `startRecording`, immediately after `playAlertSound` fired the Tink. On AirPods the mute fallback swallowed the cue — the user heard the *close* cue (the duck is restored before it plays) but never the *start* cue. `NSSound` plays through the same default output device the duck controls, so the cue cannot be exempted from the mute; sequencing is the only fix. `applyAudioInterruptionIfNeeded` is now deferred into `AudioRecorder.onCaptureLive` and fires only *after* `playAlertSound`'s duration elapses (`playAlertSound` returns the cue duration to enable this), mirroring the close path (restore-then-cue). A guard prevents a tap shorter than the cue's duration from leaving the output stuck ducked after the session ends.
 
 ## GOTCHA: the mode chip needs the pill widened
 The recording overlay ([[Sources/RecordingOverlay.swift]]) is cramped. The content-aware mode chip
