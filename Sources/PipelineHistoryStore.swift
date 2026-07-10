@@ -9,13 +9,10 @@ final class PipelineHistoryStore {
         let model = Self.makeModel()
         container = NSPersistentContainer(name: "PipelineHistory", managedObjectModel: model)
 
-        var storeURL: URL?
-        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let appName = AppName.displayName
-            let baseURL = appSupport.appendingPathComponent(appName, isDirectory: true)
-            try? FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
-            storeURL = baseURL.appendingPathComponent("PipelineHistory.sqlite")
-        }
+        // Route through the base helper so legacy-rename migration runs before
+        // this store creates a fresh empty database in the new directory.
+        let storeURL: URL? = AppState.appSupportBaseDirectory()
+            .appendingPathComponent("PipelineHistory.sqlite")
 
         if let storeURL {
             let description = NSPersistentStoreDescription(url: storeURL)

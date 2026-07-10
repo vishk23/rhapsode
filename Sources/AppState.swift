@@ -1163,18 +1163,27 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// name adopt the newest legacy directory (voice bank, history, whisper
     /// model, .settings with API keys) rather than starting empty.
     private static func migrateLegacyAppSupportIfNeeded() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let fm = FileManager.default
+        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let current = appSupport.appendingPathComponent(AppName.displayName, isDirectory: true)
-        guard !FileManager.default.fileExists(atPath: current.path) else { return }
+        // `.settings` is written on first real use; a directory without it is a
+        // freshly created husk (e.g. a store initialized before this migration
+        // ran) and is safe to replace with the legacy data.
+        let currentSettings = current.appendingPathComponent(".settings")
+        if fm.fileExists(atPath: currentSettings.path) { return }
+
         let legacyNames = AppBuild.isDevBundle
             ? ["Whispr Free Me Dev", "FreeFlow Dev"]
             : ["Whispr Free Me", "FreeFlow"]
         for name in legacyNames {
             let legacy = appSupport.appendingPathComponent(name, isDirectory: true)
-            if FileManager.default.fileExists(atPath: legacy.path) {
-                try? FileManager.default.moveItem(at: legacy, to: current)
-                return
+            let legacySettings = legacy.appendingPathComponent(".settings")
+            guard fm.fileExists(atPath: legacySettings.path) else { continue }
+            if fm.fileExists(atPath: current.path) {
+                try? fm.removeItem(at: current)
             }
+            try? fm.moveItem(at: legacy, to: current)
+            return
         }
     }
 
@@ -1207,9 +1216,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// Path: `~/Library/Application Support/FreeFlow/is-recording`
     /// (or `FreeFlow Dev/is-recording` when running the dev bundle).
     static func recordingStateFlagURL() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "FreeFlow"
-        return appSupport.appendingPathComponent("\(appName)/is-recording")
+        appSupportBaseDirectory().appendingPathComponent("is-recording")
     }
 
     /// Serial queue that owns every flag-file I/O so the recording
