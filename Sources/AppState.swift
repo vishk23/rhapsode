@@ -2209,6 +2209,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         guard ensureMicrophoneAccess() else { return }
         os_log(.info, log: recordingLog, "mic access check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
         applyAudioInterruptionIfNeeded()
+        // Open the transcription connection while the user speaks so the upload on
+        // key-release skips DNS + TLS setup.
+        LLMAPITransport.prewarm(baseURL: resolvedTranscriptionBaseURL)
         beginRecording(triggerMode: triggerMode)
         os_log(.info, log: recordingLog, "startRecording() finished: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
     }
