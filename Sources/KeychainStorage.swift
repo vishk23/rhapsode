@@ -2,16 +2,12 @@ import Foundation
 import Security
 
 enum AppSettingsStorage {
-    private static let bundleID = Bundle.main.bundleIdentifier ?? "com.vishk23.whisprfreeme"
+    private static let bundleID = Bundle.main.bundleIdentifier ?? "com.vishk23.rhapsode"
 
     private static var storageDirectory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appName = AppName.displayName
-        let dir = appSupport.appendingPathComponent(appName, isDirectory: true)
-        if !FileManager.default.fileExists(atPath: dir.path) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
-        return dir
+        // Route through the base helper so legacy-rename migration always runs
+        // before anything creates the new directory.
+        AppState.appSupportBaseDirectory()
     }
 
     private static var settingsFileURL: URL {

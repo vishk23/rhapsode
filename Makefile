@@ -1,5 +1,5 @@
-APP_NAME ?= Whispr Free Me Dev
-BUNDLE_ID ?= com.vishk23.whisprfreeme.dev
+APP_NAME ?= Rhapsode Dev
+BUNDLE_ID ?= com.vishk23.rhapsode.dev
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
 # Stable signing identity so macOS keeps Accessibility / Microphone / Input-Monitoring
@@ -15,14 +15,14 @@ APP_EXECUTABLE = $(MACOS_DIR)/$(APP_NAME)
 APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
-TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
+TEST_RUNNER = $(BUILD_DIR)/RhapsodeTests
 RESOURCES = $(CONTENTS)/Resources
 ARCH ?= $(shell uname -m)
 
 # Pick the icon source based on which bundle we are building. Dev builds get
 # a distinct hammer-on-waveform icon so a developer's dock shows at a glance
 # which FreeFlow they are running when both are installed side by side.
-ifeq ($(APP_NAME),Whispr Free Me Dev)
+ifeq ($(APP_NAME),Rhapsode Dev)
 ICON_SOURCE = Resources/AppIcon-Dev-Source.png
 ICON_ICNS = Resources/AppIcon-Dev.icns
 else
@@ -70,7 +70,7 @@ endif
 	@plutil -replace NSMicrophoneUsageDescription -string "$(APP_NAME) needs microphone access to transcribe your speech." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSSpeechRecognitionUsageDescription -string "$(APP_NAME) needs speech recognition to convert your voice to text." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSAccessibilityUsageDescription -string "$(APP_NAME) needs accessibility access to detect the text cursor position and paste transcribed text." "$(CONTENTS)/Info.plist"
-	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
+	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements Rhapsode.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
 
 test: $(TEST_RUNNER)
@@ -139,11 +139,11 @@ notarize:
 
 # Production build + signed DMG in one step: non-dev name, bundle id, and icon.
 # Requires: brew install create-dmg fileicon. Add NOTARIZE_PROFILE=<keychain
-# profile> and run `make notarize APP_NAME="Whispr Free Me"` afterwards for a
+# profile> and run `make notarize APP_NAME="Rhapsode"` afterwards for a
 # Gatekeeper-clean download; unnotarized DMGs need right-click > Open once.
 release:
 	$(MAKE) clean
-	$(MAKE) APP_NAME="Whispr Free Me" BUNDLE_ID=com.vishk23.whisprfreeme codesign-dmg
+	$(MAKE) APP_NAME="Rhapsode" BUNDLE_ID=com.vishk23.rhapsode codesign-dmg
 
 clean:
 	rm -rf $(BUILD_DIR)

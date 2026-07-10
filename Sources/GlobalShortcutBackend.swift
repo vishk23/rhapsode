@@ -1,7 +1,7 @@
 import Cocoa
 import os.log
 
-private let shortcutLog = OSLog(subsystem: "com.vishk23.whisprfreeme", category: "Shortcuts")
+private let shortcutLog = OSLog(subsystem: "com.vishk23.rhapsode", category: "Shortcuts")
 
 enum GlobalShortcutBackendError: LocalizedError {
     case eventTapUnavailable

@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let realtimeLog = OSLog(subsystem: "com.vishk23.whisprfreeme", category: "RealtimeTranscription")
+private let realtimeLog = OSLog(subsystem: "com.vishk23.rhapsode", category: "RealtimeTranscription")
 
 enum RealtimeTranscriptionError: LocalizedError {
     case invalidBaseURL(String)
@@ -32,7 +32,7 @@ final class RealtimeTranscriptionService {
     private var task: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
 
-    private let stateQueue = DispatchQueue(label: "com.vishk23.whisprfreeme.realtime.state")
+    private let stateQueue = DispatchQueue(label: "com.vishk23.rhapsode.realtime.state")
     private var finalText: String = ""
     private var partialText: String = ""
     private var finalContinuation: CheckedContinuation<String, Error>?

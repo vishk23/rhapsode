@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Whispr Free Me are documented here.
+All notable changes to Rhapsode are documented here.
 
 This project uses semantic versioning for public releases. Use `MAJOR.MINOR.PATCH`, where:
 
@@ -8,10 +8,30 @@ This project uses semantic versioning for public releases. Use `MAJOR.MINOR.PATC
 - `MINOR` changes add user-visible features and improvements.
 - `PATCH` changes fix bugs, polish existing behavior, or make small internal improvements.
 
+## [0.5.0] - 2026-07-10
+
+### Changed
+
+- **Renamed to Rhapsode** (from Whispr Free Me): app name, bundle ids
+  (`com.vishk23.rhapsode`), log subsystems, repository, docs. Existing data
+  (voice bank, history, whisper model, settings file) migrates automatically
+  from the old Application Support directory on first launch; macOS treats the
+  new bundle id as a new app, so permissions must be granted once.
+- The in-app updater now watches this repository's releases instead of
+  upstream FreeFlow's.
+
+### Fixed
+
+- A wedged microphone start (no audio ever arriving) now fails loudly after
+  10s and recovers on the next dictation, instead of spinning forever.
+- Dev-build detection was still comparing against the original "FreeFlow Dev"
+  name; it is now name-agnostic.
+
 ## [0.4.0] - 2026-07-10
 
-First release intended for use beyond the author's machine. Built on FreeFlow
-(upstream merged through 2026-07-10) plus the following.
+Released as "Whispr Free Me" (renamed Rhapsode in 0.5.0). First release
+intended for use beyond the author's machine. Built on FreeFlow (upstream
+merged through 2026-07-10) plus the following.
 
 ### Added
 
@@ -49,7 +69,7 @@ First release intended for use beyond the author's machine. Built on FreeFlow
 
 ### Changed
 
-- Rebranded from FreeFlow to Whispr Free Me (bundle ids, log subsystems,
+- Rebranded from FreeFlow to Rhapsode (bundle ids, log subsystems,
   docs); `make release` builds a production-named signed DMG.
 - Context screenshots migrated from legacy CGWindowList capture to
   ScreenCaptureKit, fixing stuck "Screen Recording Permission Needed" states

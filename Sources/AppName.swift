@@ -2,5 +2,5 @@ import Foundation
 
 enum AppName {
     static let displayName: String =
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Whispr Free Me"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Rhapsode"
 }

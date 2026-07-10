@@ -7,7 +7,7 @@ import ApplicationServices
 import ScreenCaptureKit
 import Carbon
 import os.log
-private let recordingLog = OSLog(subsystem: "com.vishk23.whisprfreeme", category: "Recording")
+private let recordingLog = OSLog(subsystem: "com.vishk23.rhapsode", category: "Recording")
 
 struct VoiceMacro: Codable, Identifiable, Equatable {
     var id: UUID = UUID()
@@ -58,7 +58,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
 enum AppBuild {
     static var isDevBundle: Bool {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) == "FreeFlow Dev"
+        // Name-agnostic so rebrands can't silently break it (it was still
+        // comparing against "FreeFlow Dev" two renames later).
+        ((Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "").hasSuffix(" Dev")
     }
 }
 
@@ -1153,7 +1155,31 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let fileURL: URL
     }
 
+    /// One-shot migration guard so the rename check runs once per process.
+    private static let legacyDataMigration: Void = migrateLegacyAppSupportIfNeeded()
+
+    /// The app was renamed FreeFlow -> Whispr Free Me -> Rhapsode; the data
+    /// directory is derived from the bundle name, so on first launch under a new
+    /// name adopt the newest legacy directory (voice bank, history, whisper
+    /// model, .settings with API keys) rather than starting empty.
+    private static func migrateLegacyAppSupportIfNeeded() {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let current = appSupport.appendingPathComponent(AppName.displayName, isDirectory: true)
+        guard !FileManager.default.fileExists(atPath: current.path) else { return }
+        let legacyNames = AppBuild.isDevBundle
+            ? ["Whispr Free Me Dev", "FreeFlow Dev"]
+            : ["Whispr Free Me", "FreeFlow"]
+        for name in legacyNames {
+            let legacy = appSupport.appendingPathComponent(name, isDirectory: true)
+            if FileManager.default.fileExists(atPath: legacy.path) {
+                try? FileManager.default.moveItem(at: legacy, to: current)
+                return
+            }
+        }
+    }
+
     static func appSupportBaseDirectory() -> URL {
+        _ = legacyDataMigration
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent(AppName.displayName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1161,9 +1187,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     static func audioStorageDirectory() -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appName = AppName.displayName
-        let audioDir = appSupport.appendingPathComponent("\(appName)/audio", isDirectory: true)
+        // Route through the base helper so legacy-rename migration always runs
+        // before anything creates the new directory.
+        let audioDir = appSupportBaseDirectory().appendingPathComponent("audio", isDirectory: true)
         if !FileManager.default.fileExists(atPath: audioDir.path) {
             try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         }
@@ -1189,7 +1215,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     /// Serial queue that owns every flag-file I/O so the recording
     /// start/stop hot path never blocks on disk.
     private static let recordingStateFlagQueue = DispatchQueue(
-        label: "com.vishk23.whisprfreeme.recording-state-flag"
+        label: "com.vishk23.rhapsode.recording-state-flag"
     )
 
     /// Write or clear the `is-recording` flag file. Called from the
@@ -1306,7 +1332,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let client = ElevenLabsClient(apiKey: key)
         do {
             let voiceID = try await client.createInstantVoiceClone(
-                name: "My Voice (Whispr Free Me)",
+                name: "My Voice (Rhapsode)",
                 audioFileURLs: audioFileURLs
             )
             await MainActor.run {

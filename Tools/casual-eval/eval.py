@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 
 DEFAULT_DB = os.path.expanduser(
-    "~/Library/Application Support/Whispr Free Me Dev/PipelineHistory.sqlite"
+    "~/Library/Application Support/Rhapsode Dev/PipelineHistory.sqlite"
 )
 DB_PATH = os.environ.get("DB_PATH", DEFAULT_DB)
 MODEL = os.environ.get("MODEL", "openai/gpt-oss-120b")

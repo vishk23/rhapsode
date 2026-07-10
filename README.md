@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="Resources/AppIcon-Source.png" width="128" height="128" alt="Whispr Free Me icon">
+  <img src="Resources/AppIcon-Source.png" width="128" height="128" alt="Rhapsode icon">
 </p>
 
-<h1 align="center">Whispr Free Me</h1>
+<h1 align="center">Rhapsode</h1>
 
 <p align="center">
   Free, open-source, two-way voice for your Mac.<br>
@@ -36,10 +36,10 @@ Hold `Fn`, talk, release — clean text lands wherever your cursor is, in well u
 **Build from source** (a Mac with Xcode command-line tools):
 
 ```bash
-git clone https://github.com/vishk23/whispr-free-me.git
-cd whispr-free-me
+git clone https://github.com/vishk23/rhapsode.git
+cd rhapsode
 make CODESIGN_IDENTITY=- ARCH=$(uname -m)   # ad-hoc signed dev build
-open "build/Whispr Free Me Dev.app"
+open "build/Rhapsode Dev.app"
 ```
 
 > Ad-hoc signing means macOS re-asks for permissions after each rebuild. If you have a Developer ID certificate, pass `CODESIGN_IDENTITY=<cert hash>` for grants that stick. `make release` builds a production-named app and a signed DMG (`brew install create-dmg fileicon` first).

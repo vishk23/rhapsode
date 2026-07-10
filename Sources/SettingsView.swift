@@ -552,7 +552,7 @@ struct GeneralSettingsView: View {
     @State private var copiedBuildInfoResetWorkItem: DispatchWorkItem?
     @StateObject private var githubCache = GitHubMetadataCache.shared
     @ObservedObject private var updateManager = UpdateManager.shared
-    private let freeflowRepoURL = URL(string: "https://github.com/zachlatta/freeflow")!
+    private let repoURL = URL(string: "https://github.com/vishk23/rhapsode")!
 
     private var appDisplayName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
@@ -621,7 +621,7 @@ struct GeneralSettingsView: View {
                             .clipShape(Circle())
 
                             Button {
-                                openURL(freeflowRepoURL)
+                                openURL(repoURL)
                             } label: {
                                 Text("zachlatta/freeflow")
                                     .font(.system(.caption, design: .monospaced).weight(.medium))
@@ -648,7 +648,7 @@ struct GeneralSettingsView: View {
                             .background(Capsule().fill(Color.yellow.opacity(0.14)))
 
                             Button {
-                                openURL(freeflowRepoURL)
+                                openURL(repoURL)
                             } label: {
                                 HStack(spacing: 4) {
                                     Image(systemName: "star")
@@ -1574,7 +1574,7 @@ struct GeneralSettingsView: View {
             }
 
             Text("""
-            When on, Whispr Free Me keeps a local copy of the audio and the exact words \
+            When on, Rhapsode keeps a local copy of the audio and the exact words \
             of each dictation in Application Support. Nothing is uploaded. Turn it off \
             any time, and delete what you've collected below.
             """)
@@ -1939,7 +1939,7 @@ struct PromptsSettingsView: View {
 
         let context = AppContext(
             appName: "\(AppName.displayName) Settings",
-            bundleIdentifier: "com.vishk23.whisprfreeme",
+            bundleIdentifier: "com.vishk23.rhapsode",
             windowTitle: "System Prompt Test",
             selectedText: nil,
             currentActivity: "User is testing the system prompt in \(AppName.displayName) settings.",

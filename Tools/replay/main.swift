@@ -15,7 +15,7 @@ let audioDir: URL = {
     }
     let home = FileManager.default.homeDirectoryForCurrentUser
     return home
-        .appendingPathComponent("Library/Application Support/Whispr Free Me Dev/VoiceBank")
+        .appendingPathComponent("Library/Application Support/Rhapsode Dev/VoiceBank")
 }()
 
 let model = ProcessInfo.processInfo.environment["REPLAY_MODEL"] ?? "whisper-large-v3-turbo"
