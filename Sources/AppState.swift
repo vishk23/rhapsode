@@ -663,6 +663,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var audioLevelCancellable: AnyCancellable?
     private var debugOverlayTimer: Timer?
     private var recordingInitializationTimer: DispatchSourceTimer?
+    /// Fires if the mic never delivers a first buffer — a wedged capture session
+    /// (e.g. the app bundle was replaced underneath a running instance) previously
+    /// left the pill spinning on the initializing dots forever, with every retry
+    /// ignored because the recording state flag stayed set.
+    private var recordingStartWatchdog: DispatchWorkItem?
+    private static let recordingStartWatchdogSeconds: TimeInterval = 10
+
+    struct RecordingStartTimeoutError: LocalizedError {
+        var errorDescription: String? {
+            "Microphone didn't start. Try again — if it persists, relaunch the app."
+        }
+    }
     private var transcriptionTask: Task<Void, Never>?
     private var transcribingAudioFileName: String?
     private var contextService: AppContextService
@@ -2566,6 +2578,16 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         startRealtimeStreamingIfEnabled()
 
+        // Watchdog: if no audio buffer ever arrives, fail the recording loudly
+        // instead of leaving the initializing dots spinning and retries dead.
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            os_log(.error, log: recordingLog, "no audio within %.0fs — failing wedged recording start", Self.recordingStartWatchdogSeconds)
+            self.handleRecordingFailure(RecordingStartTimeoutError())
+        }
+        recordingStartWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.recordingStartWatchdogSeconds, execute: watchdog)
+
         // Start engine on background thread so UI isn't blocked
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
@@ -3918,6 +3940,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private func cancelRecordingInitializationTimer() {
         recordingInitializationTimer?.cancel()
         recordingInitializationTimer = nil
+        recordingStartWatchdog?.cancel()
+        recordingStartWatchdog = nil
     }
 
     private func scheduleReadyStatusReset(after delay: TimeInterval, matching statuses: Set<String>? = nil) {
