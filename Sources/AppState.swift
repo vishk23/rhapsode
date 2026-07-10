@@ -2712,6 +2712,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
     private enum TranscriptProcessingOutcome {
         case skippedEmptyRawTranscript
+        case skippedShortTranscript
         case voiceMacro(command: String)
         case postProcessingSucceeded
         case postProcessingFailedFallback
@@ -2722,6 +2723,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
             switch self {
             case .skippedEmptyRawTranscript:
                 return "Skipped macros and post-processing for empty raw transcript"
+            case .skippedShortTranscript:
+                return "Skipped post-processing for short transcript"
             case .voiceMacro(let command):
                 return "Voice macro used: \(command)"
             case .postProcessingSucceeded:
@@ -2773,7 +2776,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
             os_log(.info, log: recordingLog, "Voice macro triggered: %{public}@", macro.command)
             return (macro.payload, .voiceMacro(command: macro.command), "")
         }
-        
+
+        if CleanupGate.shouldSkipCleanup(transcript: trimmedRawTranscript) {
+            os_log(.info, log: recordingLog, "Skipped cleanup for short transcript (%d chars)", trimmedRawTranscript.count)
+            return (trimmedRawTranscript, .skippedShortTranscript, "")
+        }
+
         do {
             let result = try await postProcessingService.postProcess(
                 transcript: trimmedRawTranscript,

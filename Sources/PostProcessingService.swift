@@ -430,6 +430,8 @@ RAW_TRANSCRIPTION:
 <<<RAW_TRANSCRIPTION
 \(transcript)
 RAW_TRANSCRIPTION
+
+Output only the cleaned transcript.
 """
 
         let promptForDisplay = """
@@ -645,7 +647,11 @@ Model: \(model)
     }
 
     private func sanitizePostProcessedTranscript(_ value: String) -> String {
-        var result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        // LLMs occasionally emit zero-width/invisible unicode that survives into the
+        // paste and breaks downstream text matching.
+        let invisibles: Set<Character> = ["\u{200B}", "\u{200C}", "\u{200D}", "\u{2060}", "\u{FEFF}"]
+        var result = String(value.filter { !invisibles.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else { return "" }
 
         // Strip outer quotes if the LLM wrapped the entire response
