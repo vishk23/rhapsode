@@ -2,6 +2,9 @@ import Foundation
 
 enum PostProcessingError: LocalizedError {
     case requestFailed(Int, String)
+    /// The model rejected the request because its rate limit was exceeded.
+    /// Carries the model name and the number of seconds until the limit resets.
+    case rateLimited(model: String, retryAfter: TimeInterval)
     case invalidResponse(String)
     case invalidInput(String)
     case emptyOutput
@@ -12,6 +15,8 @@ enum PostProcessingError: LocalizedError {
         switch self {
         case .requestFailed(let statusCode, let details):
             "Post-processing failed with status \(statusCode): \(details)"
+        case .rateLimited(let model, let retryAfter):
+            "Model \(model) rate-limited — retry in \(Int(retryAfter))s"
         case .invalidResponse(let details):
             "Invalid post-processing response: \(details)"
         case .invalidInput(let details):
@@ -216,6 +221,59 @@ Behavior:
         }
     }
 
+    /// Translate a raw transcript into the target language without
+    /// performing any of the polishing normally applied by the cleanup
+    /// pipeline. Preserves original phrasing 1:1 — no filler removal,
+    /// no reformatting, no rewording, no punctuation additions beyond
+    /// what's grammatically required by the target language.
+    ///
+    /// Used by the "Preserve exact wording" path when the user has
+    /// also configured an Output Language: skipping the LLM entirely
+    /// there would silently drop translation, so we route through a
+    /// minimal translate-only prompt instead.
+    func translateVerbatim(
+        transcript: String,
+        targetLanguage: String
+    ) async throws -> PostProcessingResult {
+        let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTranscript.isEmpty else {
+            throw PostProcessingError.invalidInput("Transcript must not be empty")
+        }
+        let trimmedLanguage = targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLanguage.isEmpty else {
+            throw PostProcessingError.invalidInput("Target language must not be empty")
+        }
+
+        let timeoutSeconds = postProcessingTimeoutSeconds
+        return try await withThrowingTaskGroup(of: PostProcessingResult.self) { group in
+            group.addTask { [weak self] in
+                guard let self else {
+                    throw PostProcessingError.invalidResponse("Post-processing service deallocated")
+                }
+                return try await self.translateVerbatimWithFallback(
+                    transcript: trimmedTranscript,
+                    targetLanguage: trimmedLanguage
+                )
+            }
+
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                throw PostProcessingError.requestTimedOut(timeoutSeconds)
+            }
+
+            do {
+                guard let result = try await group.next() else {
+                    throw PostProcessingError.invalidResponse("No translation result")
+                }
+                group.cancelAll()
+                return result
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
+    }
+
     func commandTransform(
         selectedText: String,
         voiceCommand: String,
@@ -276,8 +334,17 @@ Behavior:
     ) async throws -> PostProcessingResult {
         // A mode's cleanup-model override takes precedence over the app-wide
         // preferred model; the retry chain still falls back normally.
-        let primaryModel = modelOverride.isEmpty ? resolvedPrimaryModel() : modelOverride
+        var primaryModel = modelOverride.isEmpty ? resolvedPrimaryModel() : modelOverride
         let retryModel = resolvedRetryModel(for: primaryModel)
+
+        // Circuit breaker: pick a model that isn't cooling down. If BOTH are cooling, skip cleanup
+        // and return the raw transcript rather than send a doomed request. Reassigning primaryModel
+        // keeps the call site below byte-identical to upstream.
+        guard let availableModel = await LLMCooldownManager.shared.effectivePrimary(primaryModel, fallback: retryModel) else {
+            return PostProcessingResult(transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines), prompt: "")
+        }
+        primaryModel = availableModel
+
         do {
             return try await process(
                 transcript: transcript,
@@ -288,11 +355,17 @@ Behavior:
                 outputLanguage: outputLanguage
             )
         } catch let error as PostProcessingError {
+            // Unified fallback policy: decide whether to retry on the other model.
             let shouldFallback: Bool
             switch error {
+            case .rateLimited:
+                // The cooldown was already registered inside process() when the 429 was
+                // detected — for the fallback attempt too — so here we only switch models.
+                shouldFallback = true
             case .requestFailed(let statusCode, _):
                 shouldFallback = statusCode == 429
             case .emptyOutput:
+                // Empty output is a soft failure; try the other model once before giving up.
                 shouldFallback = true
             case .suspectedInstructionExecution:
                 shouldFallback = true
@@ -304,7 +377,18 @@ Behavior:
                 throw error
             }
 
+            // No distinct fallback left to try. Still honor the raw-transcript safe-exit for a
+            // suspected-instruction-execution so an up-front cooldown swap doesn't lose it.
             guard let retryModel else {
+                throw error
+            }
+            guard primaryModel != retryModel else {
+                if case .suspectedInstructionExecution = error {
+                    return PostProcessingResult(
+                        transcript: transcript.trimmingCharacters(in: .whitespacesAndNewlines),
+                        prompt: ""
+                    )
+                }
                 throw error
             }
 
@@ -333,8 +417,16 @@ Behavior:
         customVocabulary: [String],
         outputLanguage: String = ""
     ) async throws -> PostProcessingResult {
-        let primaryModel = resolvedPrimaryModel()
+        var primaryModel = resolvedPrimaryModel()
         let retryModel = resolvedRetryModel(for: primaryModel)
+
+        // Circuit breaker: pick a model that isn't cooling down. If BOTH are cooling, skip the
+        // transform and return the selection unchanged rather than send a doomed request.
+        guard let availableModel = await LLMCooldownManager.shared.effectivePrimary(primaryModel, fallback: retryModel) else {
+            return PostProcessingResult(transcript: selectedText, prompt: "")
+        }
+        primaryModel = availableModel
+
         do {
             return try await processCommandTransform(
                 selectedText: selectedText,
@@ -345,11 +437,15 @@ Behavior:
                 outputLanguage: outputLanguage
             )
         } catch let error as PostProcessingError {
+            // Unified fallback policy: decide whether to retry on the other model.
             let shouldFallback: Bool
             switch error {
-            case .requestFailed(let statusCode, _):
-                shouldFallback = statusCode == 429
+            case .rateLimited:
+                // The cooldown was already registered inside processCommandTransform() when the
+                // 429 was detected — for the fallback attempt too — so here we only switch models.
+                shouldFallback = true
             case .emptyOutput:
+                // Empty output is a soft failure; try the other model once before giving up.
                 shouldFallback = true
             default:
                 shouldFallback = false
@@ -359,7 +455,8 @@ Behavior:
                 throw error
             }
 
-            guard let retryModel else {
+            // Guard against re-trying the same model when primaryModel is already the fallback.
+            guard let retryModel, primaryModel != retryModel else {
                 throw error
             }
 
@@ -489,6 +586,15 @@ Model: \(model)
         }
 
         guard httpResponse.statusCode == 200 else {
+            // For 429 responses, read how long the model is rate-limited from the headers so
+            // the circuit breaker knows exactly when it becomes available again.
+            if httpResponse.statusCode == 429 {
+                // Register the cooldown here so BOTH the primary and the fallback attempt feed
+                // the breaker (the retry calls this same method), then surface the error.
+                let cooldown = LLMCooldownManager.rateLimitCooldown(from: httpResponse)
+                await LLMCooldownManager.shared.setCooldown(model, retryAfterSeconds: cooldown.seconds, persist: cooldown.isDaily)
+                throw PostProcessingError.rateLimited(model: model, retryAfter: cooldown.seconds)
+            }
             let message = String(data: data, encoding: .utf8) ?? ""
             throw PostProcessingError.requestFailed(httpResponse.statusCode, message)
         }
@@ -500,7 +606,7 @@ Model: \(model)
               let rawContent = message["content"] as? String else {
             throw PostProcessingError.invalidResponse("Missing choices[0].message.content")
         }
-        
+
         var content = rawContent
         if config.shouldStripThinkTags {
             content = ModelConfiguration.stripThinkTags(content)
@@ -620,6 +726,13 @@ Model: \(model)
         }
 
         guard httpResponse.statusCode == 200 else {
+            // Same 429 handling as process(): register the cooldown for whichever model
+            // (primary or fallback) hit the limit, then surface the error.
+            if httpResponse.statusCode == 429 {
+                let cooldown = LLMCooldownManager.rateLimitCooldown(from: httpResponse)
+                await LLMCooldownManager.shared.setCooldown(model, retryAfterSeconds: cooldown.seconds, persist: cooldown.isDaily)
+                throw PostProcessingError.rateLimited(model: model, retryAfter: cooldown.seconds)
+            }
             let message = String(data: data, encoding: .utf8) ?? ""
             throw PostProcessingError.requestFailed(httpResponse.statusCode, message)
         }
@@ -631,7 +744,7 @@ Model: \(model)
               let rawContent = message["content"] as? String else {
             throw PostProcessingError.invalidResponse("Missing choices[0].message.content")
         }
-        
+
         var content = rawContent
         if config.shouldStripThinkTags {
             content = ModelConfiguration.stripThinkTags(content)
@@ -650,6 +763,161 @@ Model: \(model)
 
     static func applyOutputLanguage(_ prompt: String, language: String) -> String {
         prompt + "\n\nIMPORTANT: Translate the final cleaned text into \(language). Output ONLY in \(language), regardless of the original spoken language."
+    }
+
+    /// System prompt used for verbatim translation. Deliberately
+    /// minimal — the whole point of this path is to translate word-
+    /// for-word without cleanup, so we avoid every rewrite / formatting
+    /// instruction from `defaultSystemPrompt`.
+    static func verbatimTranslationSystemPrompt(targetLanguage: String) -> String {
+        """
+        You are a literal translator.
+
+        Translate the user's transcript into \(targetLanguage) as literally as possible.
+
+        Rules:
+        - Preserve every word the user spoke, including filler words such as "um", "uh", "like", "you know", false starts, and repetitions. Translate these into the closest natural equivalent in \(targetLanguage) rather than deleting them.
+        - Do NOT reword, summarize, restructure, or improve the sentence.
+        - Do NOT correct grammar mistakes, awkward phrasing, or informal wording. Keep the same register and flow.
+        - Do NOT add punctuation beyond what the target language grammatically requires. If the source has no punctuation, add only the minimum needed to make the sentence readable in \(targetLanguage).
+        - Do NOT wrap the output in quotes or explain your translation. Return only the translated text.
+        - Keep profanity, slang, and explicit language intact.
+        - Output ONLY in \(targetLanguage), regardless of the source language.
+        """
+    }
+
+    private func translateVerbatimWithFallback(
+        transcript: String,
+        targetLanguage: String
+    ) async throws -> PostProcessingResult {
+        let primaryModel = resolvedPrimaryModel()
+        let retryModel = resolvedRetryModel(for: primaryModel)
+        do {
+            return try await translateVerbatim(
+                transcript: transcript,
+                targetLanguage: targetLanguage,
+                model: primaryModel
+            )
+        } catch let error as PostProcessingError {
+            let shouldFallback: Bool
+            switch error {
+            case .requestFailed(let statusCode, _):
+                shouldFallback = statusCode == 429
+            case .emptyOutput:
+                shouldFallback = true
+            default:
+                shouldFallback = false
+            }
+            guard shouldFallback, let retryModel else { throw error }
+            return try await translateVerbatim(
+                transcript: transcript,
+                targetLanguage: targetLanguage,
+                model: retryModel
+            )
+        }
+    }
+
+    private func translateVerbatim(
+        transcript: String,
+        targetLanguage: String,
+        model: String
+    ) async throws -> PostProcessingResult {
+        var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = postProcessingTimeoutSeconds
+
+        let systemPrompt = Self.verbatimTranslationSystemPrompt(targetLanguage: targetLanguage)
+        let userMessage = """
+        Translate the transcript below into \(targetLanguage), keeping the wording literal.
+
+        TRANSCRIPT:
+        <<<TRANSCRIPT
+        \(transcript)
+        TRANSCRIPT
+        """
+
+        let promptForDisplay = """
+        Model: \(model)
+
+        [System]
+        \(systemPrompt)
+
+        [User]
+        \(userMessage)
+        """
+
+        var payload: [String: Any] = [
+            "model": model,
+            "temperature": 0.0,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userMessage],
+            ],
+        ]
+        let config = ModelConfiguration.config(for: model)
+        if let maxTokens = config.maxCompletionTokens {
+            payload["max_completion_tokens"] = maxTokens
+        } else if model == defaultModel {
+            payload["max_completion_tokens"] = postProcessingMaxCompletionTokens
+        }
+        if let effort = config.reasoningEffort {
+            payload["reasoning_effort"] = effort
+        } else if model == defaultModel {
+            payload["reasoning_effort"] = defaultModelReasoningEffort
+        }
+        if let include = config.includeReasoning {
+            payload["include_reasoning"] = include
+        } else if model == defaultModel {
+            payload["include_reasoning"] = false
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+
+        let (data, response) = try await LLMAPITransport.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw PostProcessingError.invalidResponse("No HTTP response")
+        }
+        guard httpResponse.statusCode == 200 else {
+            let message = String(data: data, encoding: .utf8) ?? ""
+            throw PostProcessingError.requestFailed(httpResponse.statusCode, message)
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let firstChoice = choices.first,
+              let message = firstChoice["message"] as? [String: Any],
+              let rawContent = message["content"] as? String else {
+            throw PostProcessingError.invalidResponse("Missing choices[0].message.content")
+        }
+
+        var content = rawContent
+        if config.shouldStripThinkTags {
+            content = ModelConfiguration.stripThinkTags(content)
+        }
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PostProcessingError.emptyOutput
+        }
+        let sanitized = sanitizeVerbatimTranslation(content)
+        return PostProcessingResult(transcript: sanitized, prompt: promptForDisplay)
+    }
+
+    /// Sanitizer for the verbatim translation path. Deliberately
+    /// omits the `"EMPTY"` sentinel that `sanitizePostProcessedTranscript`
+    /// uses — that sentinel is reserved by the cleanup prompt (which
+    /// asks the LLM to return `EMPTY` when there's nothing to paste).
+    /// The verbatim prompt has no such instruction, so a legitimate
+    /// literal translation of the word "empty" must reach the user
+    /// instead of being silently dropped.
+    private func sanitizeVerbatimTranslation(_ value: String) -> String {
+        var result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !result.isEmpty else { return "" }
+        if result.hasPrefix("\"") && result.hasSuffix("\"") && result.count > 1 {
+            result.removeFirst()
+            result.removeLast()
+            result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return result
     }
 
     private func sanitizePostProcessedTranscript(_ value: String) -> String {

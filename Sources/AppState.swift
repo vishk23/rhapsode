@@ -239,6 +239,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let contextScreenshotMaxDimensionStorageKey = "context_screenshot_max_dimension"
     private let shortcutStartDelayStorageKey = "shortcut_start_delay"
     private let preserveClipboardStorageKey = "preserve_clipboard"
+    private let preserveExactWordingStorageKey = "preserve_exact_wording"
     private let keepDictationInClipboardHistoryStorageKey = "keep_dictation_in_clipboard_history"
     private let pressEnterVoiceCommandStorageKey = "press_enter_voice_command_enabled"
     private let alertSoundsEnabledStorageKey = "alert_sounds_enabled"
@@ -294,7 +295,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
     ]
     static let defaultPostProcessingModel = "openai/gpt-oss-20b"
     static let defaultPostProcessingFallbackModel = "meta-llama/llama-4-scout-17b-16e-instruct"
-    static let defaultContextModel = "meta-llama/llama-4-scout-17b-16e-instruct"
+    static let defaultContextModel = "qwen/qwen3.6-27b"
+    private static let deprecatedDefaultContextModel = "meta-llama/llama-4-scout-17b-16e-instruct"
     private static let trailingPressEnterCommandPattern = try! NSRegularExpression(
         pattern: #"(?i)(?:^|[ \t\r\n,;:\-]+)press[ \t\r\n]+enter[\s\p{P}]*$"#
     )
@@ -523,6 +525,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
     }
 
+    @Published var preserveExactWording: Bool {
+        didSet {
+            UserDefaults.standard.set(preserveExactWording, forKey: preserveExactWordingStorageKey)
+        }
+    }
+
     @Published var keepDictationInClipboardHistory: Bool {
         didSet {
             UserDefaults.standard.set(keepDictationInClipboardHistory, forKey: keepDictationInClipboardHistoryStorageKey)
@@ -694,7 +702,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let transcriptionAPIKey = Self.loadStoredAPIKey(account: transcriptionAPIKeyStorageKey)
         let postProcessingModel = UserDefaults.standard.string(forKey: postProcessingModelStorageKey) ?? Self.defaultPostProcessingModel
         let postProcessingFallbackModel = UserDefaults.standard.string(forKey: postProcessingFallbackModelStorageKey) ?? Self.defaultPostProcessingFallbackModel
-        let contextModel = UserDefaults.standard.string(forKey: contextModelStorageKey) ?? Self.defaultContextModel
+        let contextModel = Self.loadStoredContextModel(key: contextModelStorageKey)
         let shortcuts = Self.loadShortcutConfiguration(
             holdKey: holdShortcutStorageKey,
             toggleKey: toggleShortcutStorageKey,
@@ -743,6 +751,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         let preserveClipboard = UserDefaults.standard.object(forKey: preserveClipboardStorageKey) == nil
             ? true
             : UserDefaults.standard.bool(forKey: preserveClipboardStorageKey)
+        let preserveExactWording = UserDefaults.standard.bool(forKey: preserveExactWordingStorageKey)
         let keepDictationInClipboardHistory = UserDefaults.standard.bool(forKey: keepDictationInClipboardHistoryStorageKey)
         let realtimeStreamingEnabled = UserDefaults.standard.bool(forKey: realtimeStreamingEnabledStorageKey)
         let realtimeStreamingModel = UserDefaults.standard.string(forKey: realtimeStreamingModelStorageKey) ?? ""
@@ -827,6 +836,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         self.speakSelectionEnabled = speakSelectionEnabled
         self.elevenLabsAPIKey = elevenLabsAPIKey
         self.clonedVoiceID = clonedVoiceID
+        self.preserveExactWording = preserveExactWording
         self.keepDictationInClipboardHistory = keepDictationInClipboardHistory
         self.realtimeStreamingEnabled = realtimeStreamingEnabled
         self.realtimeStreamingModel = realtimeStreamingModel
@@ -935,6 +945,20 @@ final class AppState: ObservableObject, @unchecked Sendable {
             return stored
         }
         return defaultAPIBaseURL
+    }
+
+    private static func loadStoredContextModel(key: String) -> String {
+        guard let stored = UserDefaults.standard.string(forKey: key) else {
+            return defaultContextModel
+        }
+
+        let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == deprecatedDefaultContextModel {
+            UserDefaults.standard.set(defaultContextModel, forKey: key)
+            return defaultContextModel
+        }
+
+        return trimmed.isEmpty ? defaultContextModel : trimmed
     }
 
     private static func loadShortcutConfiguration(
@@ -1448,7 +1472,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     postProcessingService: postProcessingService,
                     customVocabulary: capturedCustomVocabulary,
                     customSystemPrompt: capturedCustomSystemPrompt,
-                    outputLanguage: self.outputLanguage
+                    outputLanguage: self.outputLanguage,
+                    preserveExactWording: self.preserveExactWording
                 )
                 finalTranscript = result.finalTranscript
                 processingStatus = Self.statusMessage(
@@ -2776,6 +2801,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
         case postProcessingSucceeded
         case postProcessedOnDevice
         case postProcessingFailedFallback
+        case preservedExactWording
+        case preservedExactWordingTranslated
+        case preservedExactWordingTranslationFailedFallback
         case commandModeSucceeded(invocation: CommandInvocation)
         case commandModeFailedFallback(invocation: CommandInvocation)
 
@@ -2795,6 +2823,12 @@ final class AppState: ObservableObject, @unchecked Sendable {
                 return isRetry
                     ? "Post-processing failed on retry, using raw transcript"
                     : "Post-processing failed, using raw transcript"
+            case .preservedExactWording:
+                return "Preserved exact wording, skipped post-processing"
+            case .preservedExactWordingTranslated:
+                return "Preserved exact wording, translated to output language"
+            case .preservedExactWordingTranslationFailedFallback:
+                return "Verbatim translation failed, using untranslated raw transcript"
             case .commandModeSucceeded(let invocation):
                 return "Edit mode succeeded (\(invocation.rawValue))"
             case .commandModeFailedFallback(let invocation):
@@ -2810,7 +2844,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
         postProcessingService: PostProcessingService,
         customVocabulary: String,
         customSystemPrompt: String,
-        outputLanguage: String = ""
+        outputLanguage: String = "",
+        preserveExactWording: Bool
     ) async -> (finalTranscript: String, outcome: TranscriptProcessingOutcome, prompt: String) {
         let trimmedRawTranscript = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -2840,13 +2875,44 @@ final class AppState: ObservableObject, @unchecked Sendable {
         }
 
         // Deterministic vocabulary enforcement before any LLM involvement, so the
-        // short-transcript fast path below also benefits from authoritative spellings.
+        // fast paths below (verbatim, short-transcript) also benefit from
+        // authoritative spellings — those fix ASR errors, not wording.
         let correctedTranscript = VocabularyCorrector.correct(
             trimmedRawTranscript,
             vocabulary: Self.vocabularyTerms(from: customVocabulary)
         )
         if correctedTranscript != trimmedRawTranscript {
             os_log(.info, log: recordingLog, "vocabulary correction applied")
+        }
+
+        // Preserve-exact-wording mode. Two sub-cases so translation
+        // stays honored:
+        //
+        //   1. No Output Language set — skip the LLM entirely and
+        //      return the transcript verbatim.
+        //   2. Output Language IS set — route through a stripped-down
+        //      translate-only prompt. The user asked for another
+        //      language; silently dropping translation defeats their
+        //      settings. The translate-only path preserves filler,
+        //      informal wording, and profanity 1:1 while still hitting
+        //      the target language.
+        if preserveExactWording {
+            let targetLanguage = outputLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            if targetLanguage.isEmpty {
+                return (correctedTranscript, .preservedExactWording, "")
+            }
+            do {
+                let result = try await postProcessingService.translateVerbatim(
+                    transcript: correctedTranscript,
+                    targetLanguage: targetLanguage
+                )
+                return (result.transcript, .preservedExactWordingTranslated, result.prompt)
+            } catch {
+                os_log(.error, log: recordingLog,
+                       "Verbatim translation failed: %{public}@",
+                       error.localizedDescription)
+                return (correctedTranscript, .preservedExactWordingTranslationFailedFallback, "")
+            }
         }
 
         if CleanupGate.shouldSkipCleanup(transcript: correctedTranscript) {
@@ -3042,7 +3108,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                         postProcessingService: postProcessingService,
                         customVocabulary: self.customVocabulary,
                         customSystemPrompt: self.customSystemPrompt,
-                        outputLanguage: self.outputLanguage
+                        outputLanguage: self.outputLanguage,
+                        preserveExactWording: self.preserveExactWording
                     )
                     try Task.checkCancellation()
 
@@ -3089,7 +3156,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
                         let shouldPersistRawDictationFallback: Bool
                         switch result.outcome {
-                        case .postProcessingFailedFallback:
+                        case .postProcessingFailedFallback,
+                             .preservedExactWordingTranslationFailedFallback:
                             shouldPersistRawDictationFallback = !trimmedFinalTranscript.isEmpty
                         default:
                             shouldPersistRawDictationFallback = false

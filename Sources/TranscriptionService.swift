@@ -4,6 +4,16 @@ import os.log
 private let transcriptionLog = OSLog(subsystem: "com.zachlatta.freeflow", category: "Transcription")
 
 class TranscriptionService {
+    private static let modelsSupportingVerboseJSON: Set<String> = [
+        // OpenAI's Whisper model supports segment metadata. The newer
+        // gpt-4o-transcribe family only supports the plain JSON format.
+        "whisper-1",
+        // Groq's hosted Whisper models support verbose_json and expose the
+        // segment metadata used by the hallucination filter below.
+        "whisper-large-v3",
+        "whisper-large-v3-turbo"
+    ]
+
     private let apiKey: String
     private let baseURL: URL
     private let transcriptionModel: String
@@ -12,7 +22,9 @@ class TranscriptionService {
     /// Fired when a dictation was produced by the on-device fallback rather than
     /// the cloud provider, so the UI can say so.
     var onUsedLocalFallback: (() -> Void)?
-    private let transcriptionResponseFormat = "verbose_json"
+    private var transcriptionResponseFormat: String {
+        Self.responseFormat(forModel: transcriptionModel)
+    }
     /// Whisper's initial_prompt window is ~224 tokens; cap what we send so a huge
     /// dictionary can't crowd it out.
     private static let maxVocabularyPromptLength = 400
@@ -50,6 +62,11 @@ class TranscriptionService {
             joined = candidate
         }
         return joined.isEmpty ? nil : joined
+    }
+
+    static func responseFormat(forModel model: String) -> String {
+        let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return modelsSupportingVerboseJSON.contains(normalizedModel) ? "verbose_json" : "json"
     }
 
     // Validate API key by hitting a lightweight endpoint
@@ -372,6 +389,8 @@ class TranscriptionService {
             return "Endpoint not found at \(provider) (HTTP 404). Base URL is likely wrong for this provider."
         case 413:
             return "Audio file too large for \(provider) (HTTP 413). Try a shorter recording."
+        case 400:
+            return "Provider rejected the request (HTTP 400). Check your model name and Base URL in Settings."
         case 429:
             return "Rate limit reached at \(provider) (HTTP 429). Wait a moment and try again."
         case 500..<600:

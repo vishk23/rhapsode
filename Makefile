@@ -15,6 +15,7 @@ APP_EXECUTABLE = $(MACOS_DIR)/$(APP_NAME)
 APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
+TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
 RESOURCES = $(CONTENTS)/Resources
 ARCH ?= $(shell uname -m)
 
@@ -71,6 +72,18 @@ endif
 	@plutil -replace NSAccessibilityUsageDescription -string "$(APP_NAME) needs accessibility access to detect the text cursor position and paste transcribed text." "$(CONTENTS)/Info.plist"
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
+
+test: $(TEST_RUNNER)
+	@$(TEST_RUNNER)
+
+$(TEST_RUNNER): Sources/AppContextService.swift Sources/LLMAPITransport.swift Sources/ModelConfiguration.swift Tests/AppContextServiceTests.swift
+	@mkdir -p "$(BUILD_DIR)"
+	swiftc \
+		-parse-as-library \
+		-o "$(TEST_RUNNER)" \
+		-sdk $(shell xcrun --show-sdk-path) \
+		-target $(ARCH)-apple-macosx13.0 \
+		Sources/AppContextService.swift Sources/LLMAPITransport.swift Sources/ModelConfiguration.swift Tests/AppContextServiceTests.swift
 
 icon: $(ICON_ICNS)
 
