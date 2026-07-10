@@ -254,7 +254,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private let pasteAfterShortcutReleaseDelay: TimeInterval = 0.03
     private let pressEnterAfterPasteDelay: TimeInterval = 0.08
     private let clipboardRestoreDelay: TimeInterval = 1.0
-    let maxPipelineHistoryCount = 20
+    // Sized for the History dashboard tab: at 16 kHz mono PCM16 a retained WAV is
+    // ~2 MB/min of speech, so 500 entries is roughly 300 MB-1 GB of audio worst case.
+    let maxPipelineHistoryCount = 500
     static let defaultContextScreenshotMaxDimension = Int(AppContextService.defaultScreenshotMaxDimension)
     static let contextScreenshotDimensionOptions = [1024, 768, 640, 512]
     static let defaultTranscriptionModel = "whisper-large-v3"
@@ -1355,6 +1357,18 @@ final class AppState: ObservableObject, @unchecked Sendable {
             pipelineHistory.remove(at: index)
         } catch {
             errorMessage = "Unable to delete run history entry: \(error.localizedDescription)"
+        }
+    }
+
+    func clearAllHistory() {
+        do {
+            let removedAudioFileNames = try pipelineHistoryStore.clearAll()
+            for audioFileName in removedAudioFileNames {
+                Self.deleteAudioFile(audioFileName)
+            }
+            pipelineHistory.removeAll()
+        } catch {
+            errorMessage = "Unable to clear run history: \(error.localizedDescription)"
         }
     }
 
