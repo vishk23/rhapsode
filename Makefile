@@ -7,6 +7,9 @@ APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
 # Hash = "Developer ID Application: Vishnu Kchitti (R78VP2V5AQ)" (two certs share that name,
 # so we pin by SHA-1). Override with `make CODESIGN_IDENTITY=-` for an ad-hoc build.
 CODESIGN_IDENTITY ?= DFA91A6910C03A08E484BEB0C53AC107C461C800
+# Keychain profile created with `xcrun notarytool store-credentials` — lets
+# `make notarize` run with zero arguments after `make release`.
+NOTARIZE_PROFILE ?= rhapsode-notary
 CONTENTS = $(APP_BUNDLE)/Contents
 MACOS_DIR = $(CONTENTS)/MacOS
 empty :=
