@@ -6,9 +6,10 @@ import Charts
 enum DashboardTab: String, CaseIterable, Identifiable {
     case stats       = "Stats"
     case history     = "History"
+    case modes       = "Modes"
     case dictionary  = "Dictionary"
     case snippets    = "Snippets"
-    case voiceClone  = "Voice Clone"
+    case voiceClone  = "Clone"
     case speak       = "Speak"
 
     var id: String { rawValue }
@@ -17,6 +18,7 @@ enum DashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .stats:       return "chart.bar.fill"
         case .history:     return "clock.arrow.circlepath"
+        case .modes:       return "wand.and.stars"
         case .dictionary:  return "text.book.closed.fill"
         case .snippets:    return "text.badge.plus"
         case .voiceClone:  return "waveform.badge.plus"
@@ -73,6 +75,8 @@ struct DashboardView: View {
                     DashboardStatsTab(metrics: metrics)
                 case .history:
                     DashboardHistoryTab()
+                case .modes:
+                    DashboardModesTab()
                 case .dictionary:
                     DashboardDictionaryTab()
                 case .snippets:

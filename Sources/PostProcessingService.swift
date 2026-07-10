@@ -164,21 +164,23 @@ Behavior:
     ) async throws -> PostProcessingResult {
         let vocabularyTerms = mergedVocabularyTerms(rawVocabulary: customVocabulary)
 
-        // Inject per-app style hint when content-aware modes are enabled.
+        // Inject the resolved mode's style snippet and honor its optional model
+        // override. Resolution uses bundle id AND window title, so web apps
+        // (e.g. Gmail in a browser) can route too.
+        let mode = DictationModeStore.shared.resolve(
+            bundleIdentifier: context.bundleIdentifier,
+            windowTitle: context.windowTitle
+        )
         let effectiveSystemPrompt: String
-        if DictationModes.isEnabled {
-            let snippet = DictationModes.mode(forBundleId: context.bundleIdentifier).promptSnippet
-            if !snippet.isEmpty {
-                let base = customSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? Self.defaultSystemPrompt
-                    : customSystemPrompt
-                effectiveSystemPrompt = base + snippet
-            } else {
-                effectiveSystemPrompt = customSystemPrompt
-            }
+        if let snippet = mode?.promptSnippet, !snippet.isEmpty {
+            let base = customSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? Self.defaultSystemPrompt
+                : customSystemPrompt
+            effectiveSystemPrompt = base + snippet
         } else {
             effectiveSystemPrompt = customSystemPrompt
         }
+        let modeModelOverride = mode?.cleanupModel.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         let timeoutSeconds = postProcessingTimeoutSeconds
         return try await withThrowingTaskGroup(of: PostProcessingResult.self) { group in
@@ -191,7 +193,8 @@ Behavior:
                     contextSummary: context.contextSummary,
                     customVocabulary: vocabularyTerms,
                     customSystemPrompt: effectiveSystemPrompt,
-                    outputLanguage: outputLanguage
+                    outputLanguage: outputLanguage,
+                    modelOverride: modeModelOverride
                 )
             }
 
@@ -268,9 +271,12 @@ Behavior:
         contextSummary: String,
         customVocabulary: [String],
         customSystemPrompt: String = "",
-        outputLanguage: String = ""
+        outputLanguage: String = "",
+        modelOverride: String = ""
     ) async throws -> PostProcessingResult {
-        let primaryModel = resolvedPrimaryModel()
+        // A mode's cleanup-model override takes precedence over the app-wide
+        // preferred model; the retry chain still falls back normally.
+        let primaryModel = modelOverride.isEmpty ? resolvedPrimaryModel() : modelOverride
         let retryModel = resolvedRetryModel(for: primaryModel)
         do {
             return try await process(
