@@ -1068,14 +1068,22 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     func makeTranscriptionService() throws -> TranscriptionService {
-        try TranscriptionService(
+        let service = try TranscriptionService(
             apiKey: resolvedTranscriptionAPIKey,
             baseURL: resolvedTranscriptionBaseURL,
             transcriptionModel: transcriptionModel,
             language: resolvedTranscriptionLanguage,
             vocabularyTerms: Self.vocabularyTerms(from: customVocabulary)
         )
+        service.onUsedLocalFallback = { [weak self] in
+            DispatchQueue.main.async { self?.lastDictationTranscribedLocally = true }
+        }
+        return service
     }
+
+    /// Set by the transcription race when on-device whisper produced the dictation;
+    /// consumed by the completion path to show the "Transcribed on-device" notice.
+    var lastDictationTranscribedLocally = false
 
     /// Split delimiter matches PostProcessingService.mergedVocabularyTerms — newline, comma, or semicolon.
     static func vocabularyTerms(from vocabulary: String) -> [String] {
@@ -2233,6 +2241,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         guard ensureMicrophoneAccess() else { return }
         os_log(.info, log: recordingLog, "mic access check passed: %.3fms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)
         applyAudioInterruptionIfNeeded()
+        lastDictationTranscribedLocally = false
         // Open the transcription connection while the user speaks so the upload on
         // key-release skips DNS + TLS setup.
         LLMAPITransport.prewarm(baseURL: resolvedTranscriptionBaseURL)
@@ -3073,8 +3082,13 @@ final class AppState: ObservableObject, @unchecked Sendable {
                             }
                         } else {
                             self.statusText = completionStatusText
+                            let transcribedLocally = self.lastDictationTranscribedLocally
+                            self.lastDictationTranscribedLocally = false
                             if shouldPersistRawDictationFallback {
                                 self.scheduleOverlayDismissAfterFailureIndicator(after: 2.5)
+                            } else if transcribedLocally {
+                                self.clearPendingOverlayDismissToken()
+                                self.overlayManager.showNotice("Transcribed on-device — provider unreachable")
                             } else {
                                 self.clearPendingOverlayDismissToken()
                                 if !self.showPostTranscriptionUpdateReminderIfNeeded() {

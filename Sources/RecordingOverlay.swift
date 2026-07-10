@@ -16,6 +16,7 @@ final class RecordingOverlayState: ObservableObject {
     @Published var partialTranscript: String = ""
     @Published var updateVersion: String = ""
     @Published var errorMessage: String?
+    @Published var toastIsNotice = false
     @Published var toastID: UUID?
 
     /// Number of history slots rendered by `WaveformView` (matches barCount).
@@ -233,6 +234,16 @@ final class RecordingOverlayManager {
     /// that previously only landed in `os_log` — rate limits, network
     /// failures, permission gaps, etc.
     func showError(_ message: String) {
+        showToast(message, isNotice: false, holdSeconds: 6.0)
+    }
+
+    /// Neutral informational toast (no error styling) — e.g. "Transcribed
+    /// on-device" when the local fallback salvaged a dictation.
+    func showNotice(_ message: String) {
+        showToast(message, isNotice: true, holdSeconds: 3.5)
+    }
+
+    private func showToast(_ message: String, isNotice: Bool, holdSeconds: TimeInterval) {
         let truncated: String = {
             if message.count <= Self.maxToastMessageLength { return message }
             let cutoff = message.index(message.startIndex, offsetBy: Self.maxToastMessageLength - 1)
@@ -241,11 +252,12 @@ final class RecordingOverlayManager {
         DispatchQueue.main.async {
             let toastID = UUID()
             self.overlayState.errorMessage = truncated
+            self.overlayState.toastIsNotice = isNotice
             self.overlayState.toastID = toastID
             self.lockedOverlayWidth = nil
             self.overlayState.phase = .feedback
             self.showOverlayPanel(animatedResize: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + holdSeconds) { [weak self] in
                 guard let self else { return }
                 guard self.overlayState.phase == .feedback,
                       self.overlayState.errorMessage == truncated,
@@ -1067,7 +1079,11 @@ struct RecordingOverlayView: View {
     var body: some View {
         Group {
             if state.phase == .feedback, let message = state.errorMessage {
-                ErrorOverlayView(message: message)
+                if state.toastIsNotice {
+                    NoticeOverlayView(message: message)
+                } else {
+                    ErrorOverlayView(message: message)
+                }
             } else if state.phase == .feedback {
                 FailureIndicatorView()
             } else if state.phase == .updateAvailable {
@@ -1201,6 +1217,24 @@ struct ErrorOverlayView: View {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Color.red.opacity(0.92))
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+}
+
+struct NoticeOverlayView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "cpu")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.cyan.opacity(0.9))
             Text(message)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white)

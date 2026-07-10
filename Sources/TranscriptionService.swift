@@ -9,6 +9,9 @@ class TranscriptionService {
     private let transcriptionModel: String
     private let language: String?
     private let vocabularyTerms: [String]
+    /// Fired when a dictation was produced by the on-device fallback rather than
+    /// the cloud provider, so the UI can say so.
+    var onUsedLocalFallback: (() -> Void)?
     private let transcriptionResponseFormat = "verbose_json"
     /// Whisper's initial_prompt window is ~224 tokens; cap what we send so a huge
     /// dictionary can't crowd it out.
@@ -136,9 +139,11 @@ class TranscriptionService {
                             "cloud transcription failed (%{public}@) — falling back to local whisper",
                             error.localizedDescription
                         )
-                        return try await LocalWhisperTranscriber.transcribe(
+                        let text = try await LocalWhisperTranscriber.transcribe(
                             fileURL: fileURL, language: language, vocabularyTerms: vocabularyTerms
                         )
+                        onUsedLocalFallback?()
+                        return text
                     }
                     // Hedge is mid-inference; let its result decide.
                 case .local(.success(let text)):
@@ -150,6 +155,7 @@ class TranscriptionService {
                             remoteError.localizedDescription
                         )
                     }
+                    onUsedLocalFallback?()
                     return text
                 case .local(.failure(let error)):
                     localError = error
