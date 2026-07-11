@@ -8,6 +8,19 @@ This project uses semantic versioning for public releases. Use `MAJOR.MINOR.PATC
 - `MINOR` changes add user-visible features and improvements.
 - `PATCH` changes fix bugs, polish existing behavior, or make small internal improvements.
 
+## [0.5.1] - 2026-07-10
+
+### Fixed
+
+- Whisper could parrot the vocabulary prompt onto the quiet tail of real
+  speech, pasting your dictionary terms at the end of a message. A trailing
+  run of two or more vocabulary terms in prompt order (comma-joined — the
+  echo's signature) is now stripped; genuine endings like "...coffee at
+  Dunkin'" or spoken "Cava and Dunkin'" lists are untouched.
+- The vocabulary corrector could rewrite real words that shared a coarse
+  phonetic class with a dictionary term ("Java" -> "Cava"). Word-initial
+  letters now require an exact match or the C/K/Q hard-sound group.
+
 ## [0.5.0] - 2026-07-10
 
 ### Changed
