@@ -8,6 +8,20 @@ This project uses semantic versioning for public releases. Use `MAJOR.MINOR.PATC
 - `MINOR` changes add user-visible features and improvements.
 - `PATCH` changes fix bugs, polish existing behavior, or make small internal improvements.
 
+## [0.5.3] - 2026-07-15
+
+### Fixed
+
+- **Phantom segments past the end of the recording.** Whisper pads its final
+  30-second chunk with silence and can hallucinate an entire segment onto that
+  padding — a 30.3s dictation produced a segment claiming [30.00, 59.98] whose
+  text ("Thank you") pasted into the message. The audio-energy check kept it,
+  because the only real audio in that window was a 0.3s sliver of the previous
+  word. A segment window holding less recorded audio than a filler phrase takes
+  to say (0.45s) while claiming a mostly-imaginary span is now stripped
+  outright, whatever its text and however confident the model is. Tight windows
+  (a genuinely spoken trailing word) and single-segment clips are untouched.
+
 ## [0.5.2] - 2026-07-13
 
 ### Fixed

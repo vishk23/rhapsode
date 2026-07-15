@@ -468,7 +468,8 @@ class TranscriptionService {
             var cleaned = HallucinationFilter.strip(
                 text: text,
                 segments: segments,
-                windowRMS: probe.map { probe in { probe.rms(start: $0, end: $1) } }
+                windowRMS: probe.map { probe in { probe.rms(start: $0, end: $1) } },
+                audioSeconds: probe.map { probe in { probe.audioSeconds(start: $0, end: $1) } }
             )
             if cleaned != text {
                 os_log(.info, log: transcriptionLog, "stripped trailing hallucination: %{public}@ -> %{public}@", text, cleaned)

@@ -69,7 +69,8 @@ enum LocalWhisperTranscriber {
         var cleaned = HallucinationFilter.strip(
             text: output.text,
             segments: output.segments,
-            windowRMS: probe.map { probe in { probe.rms(start: $0, end: $1) } }
+            windowRMS: probe.map { probe in { probe.rms(start: $0, end: $1) } },
+            audioSeconds: probe.map { probe in { probe.audioSeconds(start: $0, end: $1) } }
         ).trimmingCharacters(in: .whitespacesAndNewlines)
         cleaned = DictionaryEchoGuard.stripTrailingPromptEcho(
             transcript: cleaned, vocabulary: vocabularyTerms
