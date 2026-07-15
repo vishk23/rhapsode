@@ -18,6 +18,7 @@ let package = Package(
             path: "Tests/TranscriptionTests"
         ),
         .executableTarget(name: "replay", dependencies: ["Transcription"], path: "Tools/replay"),
+        .executableTarget(name: "corpus-eval", dependencies: ["Transcription"], path: "Tools/corpus-eval"),
         .target(name: "DictationModeKit", path: "Sources/DictationModes"),
         .testTarget(
             name: "DictationModeKitTests",

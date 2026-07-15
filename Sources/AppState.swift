@@ -1477,6 +1477,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             windowTitle: nil,
             selectedText: nil,
             currentActivity: item.contextSummary,
+            screenNames: item.contextScreenNames ?? [],
             contextSystemPrompt: item.contextSystemPrompt,
             contextPrompt: item.contextPrompt,
             screenshotDataURL: item.contextScreenshotDataURL,
@@ -3339,6 +3340,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             contextSummary: context.contextSummary,
             contextSystemPrompt: context.contextSystemPrompt,
             contextPrompt: context.contextPrompt,
+            contextScreenNames: context.screenNames,
             contextScreenshotDataURL: context.screenshotDataURL,
             contextScreenshotStatus: context.screenshotError
                 ?? "available (\(context.screenshotMimeType ?? "image"))",
@@ -3453,6 +3455,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             windowTitle: windowTitle,
             selectedText: nil,
             currentActivity: "Could not refresh app context at stop time; using text-only post-processing.",
+            screenNames: [],
             contextSystemPrompt: resolvedContextSystemPrompt(),
             contextPrompt: nil,
             screenshotDataURL: nil,

@@ -1943,6 +1943,7 @@ struct PromptsSettingsView: View {
             windowTitle: "System Prompt Test",
             selectedText: nil,
             currentActivity: "User is testing the system prompt in \(AppName.displayName) settings.",
+            screenNames: [],
             contextSystemPrompt: nil,
             contextPrompt: nil,
             screenshotDataURL: nil,

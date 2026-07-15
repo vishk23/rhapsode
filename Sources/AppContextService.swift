@@ -16,6 +16,9 @@ struct AppContext {
     let windowTitle: String?
     let selectedText: String?
     let currentActivity: String
+    /// Proper nouns visible on screen when this context was captured, spelled as they
+    /// appear there. Untrusted: sourced from whatever page or message is in front.
+    let screenNames: [String]
     let contextSystemPrompt: String?
     let contextPrompt: String?
     let screenshotDataURL: String?
@@ -31,12 +34,20 @@ final class AppContextService {
     static let defaultContextModel = "qwen/qwen3.6-27b"
     static let defaultContextPrompt = """
 You are a context synthesis assistant for a speech-to-text pipeline.
-Given app/window metadata and an optional screenshot, output exactly two sentences that describe what the user is doing right now and the likely writing intent in the current window.
+Given app/window metadata and an optional screenshot, output exactly two labelled sections.
+
+ACTIVITY: exactly two sentences describing what the user is doing right now and the likely writing intent in the current window.
 Prioritize concrete details only from the context: for email, identify recipients, subject or thread cues, and whether the user is replying or composing; for terminal/code/text work, identify the active command, file, document title, or topic.
 If details are missing, state uncertainty instead of inventing facts.
-Return only two sentences, no labels, no markdown, no extra commentary.
+
+NAMES: a comma-separated list of proper nouns visible on screen, copied EXACTLY as spelled there — people's names, @handles, companies, products, and place names.
+These correct the speech recognizer, which spells unfamiliar names phonetically, so favor names the user is likely to say aloud: whoever they are writing to or about, and the organizations under discussion.
+Copy each name verbatim, including unusual spellings — never normalize a name to a more common variant.
+Each entry must be a name only, never a phrase or sentence. Skip generic interface labels. Write "NAMES: none" when no proper nouns are visible.
+
+Return only those two sections, no markdown, no extra commentary.
 """
-    static let defaultContextPromptDate = "2026-02-24"
+    static let defaultContextPromptDate = "2026-07-15"
     static let defaultScreenshotMaxDimension: CGFloat = 1024
 
     private let apiKey: String
@@ -102,6 +113,7 @@ Return only two sentences, no labels, no markdown, no extra commentary.
                 windowTitle: nil,
                 selectedText: nil,
                 currentActivity: "You are dictating in an unrecognized context.",
+                screenNames: [],
                 contextSystemPrompt: contextSystemPrompt,
                 contextPrompt: nil,
                 screenshotDataURL: nil,
@@ -123,6 +135,7 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         )
         let currentActivity: String
         let contextPrompt: String?
+        var screenNames: [String] = []
         if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if let result = await inferActivityWithLLM(
                 appName: appName,
@@ -133,6 +146,7 @@ Return only two sentences, no labels, no markdown, no extra commentary.
                 contextSystemPrompt: contextSystemPrompt
             ) {
                 currentActivity = result.activity
+                screenNames = result.screenNames
                 contextPrompt = result.prompt
             } else {
                 currentActivity = fallbackCurrentActivity(
@@ -161,6 +175,7 @@ Return only two sentences, no labels, no markdown, no extra commentary.
             windowTitle: windowTitle,
             selectedText: selectedText,
             currentActivity: currentActivity,
+            screenNames: screenNames,
             contextSystemPrompt: contextSystemPrompt,
             contextPrompt: contextPrompt,
             screenshotDataURL: screenshot.dataURL,
@@ -176,7 +191,7 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         selectedText: String?,
         screenshotDataURL: String?,
         contextSystemPrompt: String
-    ) async -> (activity: String, prompt: String)? {
+    ) async -> (activity: String, screenNames: [String], prompt: String)? {
         let attempts: [(model: String, screenshotDataURL: String?)] =
             if let screenshotDataURL {
                 [
@@ -214,7 +229,7 @@ Return only two sentences, no labels, no markdown, no extra commentary.
         screenshotDataURL: String?,
         contextSystemPrompt: String,
         model: String
-    ) async -> (activity: String, prompt: String)? {
+    ) async -> (activity: String, screenNames: [String], prompt: String)? {
         do {
             var request = URLRequest(url: URL(string: "\(baseURL)/chat/completions")!)
             request.httpMethod = "POST"
@@ -280,14 +295,33 @@ Selected text: \(selectedText ?? "None")
                 return nil
             }
 
-            guard let activity = Self.activitySummary(from: content, model: model) else { return nil }
-            return (activity: activity, prompt: fullPrompt)
+            guard let parsed = Self.parseContextResponse(from: content, model: model) else { return nil }
+            return (activity: parsed.activity, screenNames: parsed.screenNames, prompt: fullPrompt)
         } catch {
             return nil
         }
     }
 
+    struct ContextResponse {
+        let activity: String
+        /// Proper nouns read off the screen, spelled as they appear there.
+        let screenNames: [String]
+    }
+
+    /// Names are short, single-line tokens. Instructions need room — these caps are
+    /// what keeps hostile screen text from becoming a prompt for the cleanup model.
+    static let maxScreenNames = 24
+    static let maxScreenNameLength = 64
+    static let maxScreenNameWords = 4
+
     static func activitySummary(from rawContent: String, model: String) -> String? {
+        parseContextResponse(from: rawContent, model: model)?.activity
+    }
+
+    /// Splits the context model's reply into its ACTIVITY and NAMES sections. A reply
+    /// with no NAMES section — an older custom prompt, or a model that ignored the
+    /// format — parses as activity-only, exactly as it did before names existed.
+    static func parseContextResponse(from rawContent: String, model: String) -> ContextResponse? {
         var content = rawContent
         if ModelConfiguration.config(for: model).shouldStripThinkTags {
             content = ModelConfiguration.stripThinkTags(content)
@@ -295,7 +329,131 @@ Selected text: \(selectedText ?? "None")
 
         let cleaned = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
-        return normalizedActivitySummary(cleaned)
+
+        let lines = cleaned.components(separatedBy: .newlines)
+        guard let namesLineIndex = lines.firstIndex(where: { isNamesLabel($0) }) else {
+            return ContextResponse(activity: normalizedActivitySummary(cleaned), screenNames: [])
+        }
+
+        let activityText = lines[lines.startIndex..<namesLineIndex]
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let activity = normalizedActivitySummary(stripLabel(from: activityText, label: "ACTIVITY"))
+
+        let namesText = lines[namesLineIndex...]
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let screenNames = sanitizeScreenNames(stripLabel(from: namesText, label: "NAMES"))
+
+        guard !activity.isEmpty else { return nil }
+        return ContextResponse(activity: activity, screenNames: screenNames)
+    }
+
+    private static func isNamesLabel(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("names:")
+    }
+
+    private static func stripLabel(from value: String, label: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("\(label.lowercased()):") else { return trimmed }
+        return String(trimmed.dropFirst(label.count + 1))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Screen text is not authored by the user — it is whatever page, DM, or document
+    /// happens to be in front. Everything that survives here reaches the cleanup
+    /// model, so entries that aren't shaped like a name are dropped rather than
+    /// trusted: too long, too many words, no letters, or a bare "none".
+    static func sanitizeScreenNames(_ rawList: String) -> [String] {
+        let separators = CharacterSet(charactersIn: ",;\n")
+        var seen = Set<String>()
+        var names: [String] = []
+
+        for candidate in rawList.components(separatedBy: separators) {
+            let name = normalizedScreenName(candidate)
+            guard !name.isEmpty else { continue }
+            guard name.count <= maxScreenNameLength else { continue }
+            guard name.split(separator: " ").count <= maxScreenNameWords else { continue }
+            guard name.contains(where: { $0.isLetter }) else { continue }
+
+            let key = name.lowercased()
+            guard key != "none", key != "n/a", !seen.contains(key) else { continue }
+            seen.insert(key)
+            names.append(name)
+
+            if names.count == maxScreenNames { break }
+        }
+
+        return withoutOrdinaryWords(names)
+    }
+
+    /// Drops single-word names that are ordinary English words.
+    ///
+    /// The cleanup model cannot be talked out of these: told verbatim that "bus"
+    /// must survive a screen showing "Buss", it still wrote "I'll take the Buss
+    /// home" in 4 of 5 live runs. So the ambiguous entry never reaches it. The cost
+    /// is nil — a name that is also an everyday word is one the recognizer already
+    /// spells correctly — and the rule buys back the repo's law that a wrong
+    /// correction is worse than a missed one.
+    ///
+    /// Multi-word entries ("Stephen Croke") are unambiguously names and always survive.
+    static func withoutOrdinaryWords(_ names: [String]) -> [String] {
+        let singleWordCandidates = Set(
+            names.filter { !$0.contains(" ") }.map { $0.lowercased() }
+        )
+        guard !singleWordCandidates.isEmpty else { return names }
+
+        let ordinary = ordinaryEnglishWords(among: singleWordCandidates)
+        guard !ordinary.isEmpty else { return names }
+
+        return names.filter { !ordinary.contains($0.lowercased()) }
+    }
+
+    /// Which of `candidates` are everyday English words, per the system word list.
+    ///
+    /// Only lowercase entries count as ordinary: web2 lists both "mark" and "Mark",
+    /// and treating the capitalized ones as words would drop "Stephen" and
+    /// "Muhammad" — the exact names this feature exists to carry. NSSpellChecker is
+    /// unusable here for that reason: it calls "muhammad" correctly spelled.
+    ///
+    /// Streamed rather than cached: a menu-bar app should not hold 200k words
+    /// resident for the rest of the day to check a handful of tokens. A missing word
+    /// list simply means no entry is dropped, leaving the prompt as the only guard.
+    private static func ordinaryEnglishWords(among candidates: Set<String>) -> Set<String> {
+        guard let contents = try? String(
+            contentsOf: URL(fileURLWithPath: "/usr/share/dict/words"),
+            encoding: .utf8
+        ) else {
+            return []
+        }
+
+        var found = Set<String>()
+        for line in contents.split(separator: "\n") {
+            guard line.first?.isLowercase == true else { continue }
+            let word = String(line)
+            if candidates.contains(word) {
+                found.insert(word)
+                if found.count == candidates.count { break }
+            }
+        }
+        return found
+    }
+
+    private static func normalizedScreenName(_ value: String) -> String {
+        let stripped = value.filter { !$0.isNewline && !isControlCharacter($0) }
+        let unbulleted = stripped.drop(while: { $0 == "-" || $0 == "*" || $0 == "•" || $0 == " " })
+        // Apostrophes stay: "Dunkin'" is a name, not a quoted one.
+        return unbulleted
+            .trimmingCharacters(in: CharacterSet(charactersIn: " \t\"“”[](){}<>"))
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .joined(separator: " ")
+    }
+
+    private static func isControlCharacter(_ character: Character) -> Bool {
+        guard let ascii = character.asciiValue else { return false }
+        return ascii < 0x20 || ascii == 0x7F
     }
 
     private static func normalizedActivitySummary(_ value: String) -> String {

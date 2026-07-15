@@ -19,6 +19,8 @@ struct PipelineHistoryItem: Identifiable, Codable {
     let contextSummary: String
     let contextSystemPrompt: String?
     let contextPrompt: String?
+    /// Optional so history persisted before screen-name capture still decodes.
+    let contextScreenNames: [String]?
     let contextScreenshotDataURL: String?
     let contextScreenshotStatus: String
     let postProcessingStatus: String
@@ -42,6 +44,7 @@ struct PipelineHistoryItem: Identifiable, Codable {
         contextSummary: String,
         contextSystemPrompt: String? = nil,
         contextPrompt: String? = nil,
+        contextScreenNames: [String]? = nil,
         contextScreenshotDataURL: String?,
         contextScreenshotStatus: String,
         postProcessingStatus: String,
@@ -64,6 +67,7 @@ struct PipelineHistoryItem: Identifiable, Codable {
         self.contextSummary = contextSummary
         self.contextSystemPrompt = contextSystemPrompt
         self.contextPrompt = contextPrompt
+        self.contextScreenNames = contextScreenNames
         self.contextScreenshotDataURL = contextScreenshotDataURL
         self.contextScreenshotStatus = contextScreenshotStatus
         self.postProcessingStatus = postProcessingStatus
