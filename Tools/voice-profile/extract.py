@@ -19,7 +19,23 @@ from collections import Counter
 from pathlib import Path
 
 DEFAULT_DB = Path.home() / "Library/Application Support/Rhapsode/PipelineHistory.sqlite"
+DEFAULT_VOICEBANK = Path.home() / "Library/Application Support/Rhapsode/VoiceBank/VoiceBank.sqlite"
 DEFAULT_OUT = Path.home() / "VoiceProfile/corpus.md"
+
+BUNDLE_NAMES = {
+    "com.anthropic.claudefordesktop": "Claude",
+    "com.openai.chat": "ChatGPT",
+    "com.apple.MobileSMS": "Messages",
+    "com.apple.Safari": "Safari",
+    "com.google.Chrome": "Chrome",
+    "com.apple.Terminal": "Terminal",
+    "com.googlecode.iterm2": "iTerm",
+    "com.microsoft.VSCode": "VS Code",
+    "com.apple.mail": "Mail",
+    "com.tinyspeck.slackmacgap": "Slack",
+    "com.apple.finder": "Finder",
+    "com.apple.Notes": "Notes",
+}
 APPLE_EPOCH_OFFSET = 978307200  # Core Data timestamps count from 2001-01-01
 MIN_WORDS = 5
 
@@ -62,12 +78,35 @@ def load_entries(db_path):
     return rows
 
 
+def load_voicebank(db_path):
+    """VoiceBank is the uncapped archive: every opted-in dictation since the
+    feature landed. Raw transcripts only (no cleaned versions), app context
+    via bundle id."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT ZCREATEDAT AS ZTIMESTAMP, ZAPPBUNDLEID, ZTRANSCRIPT AS ZRAWTRANSCRIPT, "
+        "ZDURATIONMS FROM ZVOICESAMPLEENTRY ORDER BY ZCREATEDAT"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="path to PipelineHistory.sqlite")
+    parser.add_argument("--voicebank", type=Path, default=DEFAULT_VOICEBANK,
+                        help="path to VoiceBank.sqlite (uncapped archive)")
+    parser.add_argument("--source", choices=["history", "voicebank"], default="history",
+                        help="history: recent capped store with cleaned diffs; "
+                             "voicebank: full uncapped archive (raw only)")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="output corpus path")
     parser.add_argument("--min-words", type=int, default=MIN_WORDS, help="drop shorter entries")
     args = parser.parse_args()
+
+    if args.source == "voicebank":
+        run_voicebank(args)
+        return
 
     if not args.db.exists():
         sys.exit(f"error: history database not found at {args.db}\n"
@@ -133,6 +172,67 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(lines))
     print(f"wrote {args.out}: {len(entries)} entries, ~{total_words} words, {len(by_app)} contexts")
+
+
+def run_voicebank(args):
+    if not args.voicebank.exists():
+        sys.exit(f"error: VoiceBank database not found at {args.voicebank}")
+    rows = load_voicebank(copy_db(args.voicebank))
+
+    entries, seen = [], set()
+    dropped = Counter()
+    for row in rows:
+        raw = (row["ZRAWTRANSCRIPT"] or "").strip()
+        words = normalize(raw)
+        if not raw:
+            dropped["empty"] += 1
+            continue
+        if len(words) < args.min_words:
+            dropped["short"] += 1
+            continue
+        key = " ".join(words)
+        if key in seen:
+            dropped["duplicate"] += 1
+            continue
+        seen.add(key)
+        entries.append(row)
+
+    if not entries:
+        sys.exit("error: no entries survived filtering — nothing to write")
+
+    by_app = {}
+    for row in entries:
+        app = BUNDLE_NAMES.get(row["ZAPPBUNDLEID"] or "", row["ZAPPBUNDLEID"] or "Unknown")
+        by_app.setdefault(app, []).append(row)
+
+    total_words = sum(len(normalize(r["ZRAWTRANSCRIPT"])) for r in entries)
+    total_min = sum((r["ZDURATIONMS"] or 0) for r in entries) / 60000
+    lines = [
+        "# Rhapsode voice corpus — full VoiceBank archive",
+        "",
+        f"Extracted {datetime.date.today().isoformat()}. "
+        f"{len(entries)} entries, ~{total_words} words, {total_min:.0f} minutes of speech "
+        f"(dropped: {dropped['empty']} empty, {dropped['short']} short, {dropped['duplicate']} duplicate).",
+        "",
+        "Context breakdown: "
+        + ", ".join(f"{app} {len(rs)}" for app, rs in sorted(by_app.items(), key=lambda kv: -len(kv[1]))),
+        "",
+        "Raw (uncleaned) transcripts — the spoken voice verbatim, grouped by app,",
+        "chronological within group.",
+        "",
+    ]
+    for app, rs in sorted(by_app.items(), key=lambda kv: -len(kv[1])):
+        lines += [f"## {app} ({len(rs)} entries)", ""]
+        for row in rs:
+            ts = datetime.datetime.fromtimestamp(row["ZTIMESTAMP"] + APPLE_EPOCH_OFFSET)
+            lines.append(f"**{ts:%Y-%m-%d %H:%M}**  ")
+            lines.append(row["ZRAWTRANSCRIPT"].strip())
+            lines.append("")
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text("\n".join(lines))
+    print(f"wrote {args.out}: {len(entries)} entries, ~{total_words} words, "
+          f"{total_min:.0f} min, {len(by_app)} contexts")
 
 
 if __name__ == "__main__":
