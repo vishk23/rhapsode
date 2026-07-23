@@ -69,9 +69,17 @@ Everything generated here is your personal speech. Outputs are gitignored in
 this directory and default to `~/VoiceProfile/` outside the repo. Never
 commit a corpus, a profile, or your filters file.
 
+## The `/write-as-me` skill
+
+[skill-template/SKILL.md](skill-template/SKILL.md) is a ready-made Claude
+Code skill: copy it to `~/.claude/skills/write-as-me/`, point
+`RHAPSODE_REPO` at your checkout, and any Claude Code session can draft copy
+in your voice — auto-refreshing the corpus when it's stale, grounding drafts
+in your verbatim words, and auditing against your lexicon.
+
 ## Roadmap
 
-A `/write-as-me` skill or MCP server that re-runs extraction on demand and
-hands agents an always-current profile. The pieces are in place: `extract.py`
-is deterministic and filter-aware, and `PROFILE_GUIDE.md` makes the
-profile-building step repeatable.
+An MCP server for clients without filesystem access (claude.ai, ChatGPT
+desktop, mobile) exposing `get_voice_profile` / `search_corpus` over the
+same extraction. Local agents don't need it — the skill plus the files
+already cover them.
